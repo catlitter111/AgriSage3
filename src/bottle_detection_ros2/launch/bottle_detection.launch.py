@@ -38,7 +38,7 @@ def generate_launch_description():
     
     show_display_arg = DeclareLaunchArgument(
         'show_display',
-        default_value='false',
+        default_value='True',
         description='是否显示图像窗口'
     )
     

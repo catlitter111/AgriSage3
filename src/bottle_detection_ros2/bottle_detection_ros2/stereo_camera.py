@@ -78,6 +78,7 @@ class StereoCamera:
                 # 尝试设置分辨率
                 self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
                 self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
                 
                 # 读取实际的分辨率
                 actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
