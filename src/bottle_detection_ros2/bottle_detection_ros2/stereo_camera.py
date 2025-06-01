@@ -14,7 +14,7 @@ import os
 class StereoCamera:
     """双目相机类"""
     
-    def __init__(self, camera_id=21, width=1280, height=480):
+    def __init__(self, camera_id=1, width=1280, height=480):
         """
         初始化双目相机
         

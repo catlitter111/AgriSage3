@@ -103,7 +103,7 @@ class BottleDetectionNode(Node):
     def _declare_parameters(self):
         """声明ROS2参数"""
         # 相机参数
-        self.declare_parameter('camera_id', 21)
+        self.declare_parameter('camera_id', 1)
         self.declare_parameter('camera_width', 1280)
         self.declare_parameter('camera_height', 480)
         self.declare_parameter('calibration_file', '')
