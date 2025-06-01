@@ -40,5 +40,6 @@
         "/home/monster/download/project/AgriSage/install/bottle_detection_msgs/local/lib/python3.10/dist-packages",
         "/opt/ros/humble/lib/python3.10/site-packages",
         "/opt/ros/humble/local/lib/python3.10/dist-packages"
-    ]
+    ],
+    "cmake.sourceDirectory": "/home/monster/download/AgriSage3/src/bottle_detection_ros2"
 }
