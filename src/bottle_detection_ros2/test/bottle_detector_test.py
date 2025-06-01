@@ -11,7 +11,7 @@ import logging
 import time
 import sys
 import os
-from rknn.api import RKNN
+from rknnlite.api import RKNNLite
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -51,14 +51,14 @@ class BottleDetector:
     def load_model(self):
         """加载RKNN模型"""
         try:
-            self.rknn = RKNN()
+            self.rknn = RKNNLite()
             # 加载RKNN模型文件
             if self.rknn.load_rknn(self.model_path) != 0:
                 logger.error('加载RKNN模型失败')
                 return False
                 
             # 初始化运行时环境，目标设备为RK3588
-            if self.rknn.init_runtime(target='rk3588', device_id=0) != 0:
+            if self.rknn.init_runtime() != 0:
                 logger.error('初始化运行时环境失败!')
                 return False
                 
@@ -380,9 +380,9 @@ def test_image(detector, image_path):
 
 def test_video(detector, video_path):
     """测试视频或摄像头"""
-    if video_path == "0":
+    if video_path == "1":
         # 使用摄像头
-        cap = cv2.VideoCapture(0)
+        cap = cv2.VideoCapture(1,cv2.CAP_V4L2)
         logger.info("使用摄像头进行测试")
     else:
         # 使用视频文件
@@ -397,7 +397,7 @@ def test_video(detector, video_path):
     fps = cap.get(cv2.CAP_PROP_FPS)
     width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
     
     # 创建视频写入器（可选）
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
@@ -465,7 +465,7 @@ if __name__ == '__main__':
     """主函数 - 测试瓶子检测模块"""
     
     # 默认模型路径（需要根据实际情况修改）
-    MODEL_PATH = r"AgriSage3\src\bottle_detection_ros2\data\yolo11n.rknn"  # 请替换为实际的RKNN模型路径
+    MODEL_PATH = "/home/monster/download/AgriSage3/src/bottle_detection_ros2/data/yolo11n.rknn"  # 请替换为实际的RKNN模型路径
     
     
     
@@ -477,7 +477,7 @@ if __name__ == '__main__':
         logger.error("模型加载失败")
         sys.exit(1)
     
-    test_video(detector, "0")
+    test_video(detector, "1")
 
     # 释放模型资源
     detector.release_model()

@@ -26,7 +26,7 @@ def generate_launch_description():
     
     model_path_arg = DeclareLaunchArgument(
         'model_path',
-        default_value='/home/monster/download/bottle_ws/src/bottle_detection_ros2/data/yolo11n.rknn',
+        default_value='/home/monster/download/AgriSage3/src/bottle_detection_ros2/data/yolo11n.rknn',
         description='RKNN模型文件路径'
     )
     
@@ -44,7 +44,7 @@ def generate_launch_description():
     
     calibration_file_arg = DeclareLaunchArgument(
         'calibration_file',
-        default_value='/home/monster/download/bottle_ws/src/bottle_detection_ros2/data/out.xls',
+        default_value='/home/monster/download/AgriSage3/src/bottle_detection_ros2/data/out.xls',
         description='相机标定文件路径（留空使用默认参数）'
     )
     
