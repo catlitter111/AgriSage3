@@ -63,7 +63,7 @@ class BottleDetector:
                 return False
             
             # 初始化运行时环境
-            ret = self.rknn.init_runtime(target='rk3588', device_id=0)
+            ret = self.rknn.init_runtime()
             if ret != 0:
                 print('初始化RKNN运行时环境失败')
                 return False

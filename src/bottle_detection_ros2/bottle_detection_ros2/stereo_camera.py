@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-双目相机类
-处理双目相机的标定、校正、视差计算和3D重建
+双目相机类 - 修复V2版本
+避免GStreamer问题，直接使用V4L2
 """
 
 import cv2
@@ -14,7 +14,7 @@ import os
 class StereoCamera:
     """双目相机类"""
     
-    def __init__(self, camera_id=1, width=1280, height=480):
+    def __init__(self, camera_id=21, width=1280, height=480):
         """
         初始化双目相机
         
@@ -49,6 +49,101 @@ class StereoCamera:
         # 距离计算参数
         self.min_valid_distance = 0.2  # 最小有效距离（米）
         self.max_valid_distance = 5.0  # 最大有效距离（米）
+    
+    def open_camera(self):
+        """
+        打开相机 - 简化版本，避免GStreamer问题
+        
+        返回:
+        成功返回True，失败返回False
+        """
+        try:
+            print(f"正在打开相机 ID={self.camera_id}")
+            
+            # 方法1：尝试使用V4L2后端
+            print("尝试使用V4L2后端...")
+            self.cap = cv2.VideoCapture(self.camera_id, cv2.CAP_V4L2)
+            
+            if not self.cap.isOpened():
+                print("V4L2后端失败，尝试默认后端...")
+                # 方法2：使用默认后端
+                self.cap = cv2.VideoCapture(self.camera_id)
+            
+            if self.cap.isOpened():
+                print("相机已打开，设置参数...")
+                
+                # 设置缓冲区大小为1，减少延迟
+                self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                
+                # 尝试设置分辨率
+                self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+                self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+                
+                # 读取实际的分辨率
+                actual_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                actual_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                fps = self.cap.get(cv2.CAP_PROP_FPS)
+                
+                print(f"相机参数: {actual_width}x{actual_height} @ {fps}fps")
+                
+                # 测试读取一帧
+                print("测试读取帧...")
+                ret, frame = self.cap.read()
+                if ret and frame is not None:
+                    print(f"成功读取测试帧，尺寸: {frame.shape}")
+                    print("相机初始化成功！")
+                    return True
+                else:
+                    print("无法读取测试帧")
+                    self.cap.release()
+                    self.cap = None
+                    return False
+            else:
+                print("无法打开相机")
+                return False
+                
+        except Exception as e:
+            print(f"打开相机时出错: {e}")
+            if self.cap:
+                self.cap.release()
+                self.cap = None
+            return False
+    
+    def capture_frame(self):
+        """
+        捕获一帧图像
+        
+        返回:
+        (left_frame, right_frame) 左右相机图像，失败返回(None, None)
+        """
+        if not self.cap or not self.cap.isOpened():
+            return None, None
+        
+        ret, frame = self.cap.read()
+        if not ret or frame is None:
+            return None, None
+        
+        # 获取图像尺寸
+        h, w = frame.shape[:2]
+        
+        # 如果是双目相机（宽度大于高度的1.5倍）
+        if w > h * 1.5:
+            # 分割左右相机图像
+            mid = w // 2
+            frame_left = frame[:, :mid]
+            frame_right = frame[:, mid:]
+        else:
+            # 如果不是双目相机格式，返回相同图像
+            frame_left = frame
+            frame_right = frame.copy()
+        
+        return frame_left, frame_right
+    
+    def close_camera(self):
+        """关闭相机"""
+        if self.cap and self.cap.isOpened():
+            self.cap.release()
+            print("相机已关闭")
     
     def load_camera_params(self, file_path=None):
         """
@@ -180,59 +275,6 @@ class StereoCamera:
         except Exception as e:
             print(f"设置立体校正参数失败: {e}")
             return False
-    
-    def open_camera(self):
-        """
-        打开相机
-        
-        返回:
-        成功返回True，失败返回False
-        """
-        try:
-            self.cap = cv2.VideoCapture(self.camera_id)
-            
-            # 设置相机参数
-            self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-            self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
-            
-            if not self.cap.isOpened():
-                print("错误：无法打开相机")
-                return False
-            
-            print(f"成功打开相机 ID={self.camera_id}, 分辨率={self.width}x{self.height}")
-            return True
-            
-        except Exception as e:
-            print(f"打开相机失败: {e}")
-            return False
-    
-    def close_camera(self):
-        """关闭相机"""
-        if self.cap and self.cap.isOpened():
-            self.cap.release()
-            print("相机已关闭")
-    
-    def capture_frame(self):
-        """
-        捕获一帧图像
-        
-        返回:
-        (left_frame, right_frame) 左右相机图像，失败返回(None, None)
-        """
-        if not self.cap or not self.cap.isOpened():
-            return None, None
-        
-        ret, frame = self.cap.read()
-        if not ret:
-            return None, None
-        
-        # 分割左右相机图像
-        # 假设左右相机图像是水平拼接的
-        frame_left = frame[0:self.height, 0:self.width//2]
-        frame_right = frame[0:self.height, self.width//2:self.width]
-        
-        return frame_left, frame_right
     
     def rectify_stereo_images(self, frame_left, frame_right):
         """
