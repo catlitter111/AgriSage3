@@ -11,7 +11,7 @@ import logging
 import time
 import sys
 import os
-from bottle_rknn_pool import BottleRKNNPoolExecutor
+from .bottle_rknn_pool import BottleRKNNPoolExecutor
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
