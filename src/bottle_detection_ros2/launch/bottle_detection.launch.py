@@ -20,7 +20,7 @@ def generate_launch_description():
     # 声明启动参数
     camera_id_arg = DeclareLaunchArgument(
         'camera_id',
-        default_value='21',
+        default_value='1',
         description='双目相机设备ID'
     )
     
