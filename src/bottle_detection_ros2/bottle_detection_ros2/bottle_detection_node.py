@@ -9,12 +9,14 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image, CompressedImage
-from bottle_detection_ros2.msg import BottleDetection
+from geometry_msgs.msg import PointStamped
+from std_msgs.msg import String, Float32, Int32, Header
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import threading
 import time
+import json
 from .stereo_camera import StereoCamera
 from .bottle_detector import BottleDetector
 
@@ -62,8 +64,16 @@ class BottleDetectionNode(Node):
             Image, 'bottle_detection/annotated_image', qos_profile)
         self.compressed_image_pub = self.create_publisher(
             CompressedImage, 'bottle_detection/compressed_image', qos_profile)
-        self.bottle_detection_pub = self.create_publisher(
-            BottleDetection, 'bottle_detection/result', 10)
+        
+        # 使用标准消息类型发布检测结果
+        self.bottle_position_pub = self.create_publisher(
+            PointStamped, 'bottle_detection/nearest_position', 10)
+        self.bottle_distance_pub = self.create_publisher(
+            Float32, 'bottle_detection/nearest_distance', 10)
+        self.bottle_count_pub = self.create_publisher(
+            Int32, 'bottle_detection/count', 10)
+        self.detection_info_pub = self.create_publisher(
+            String, 'bottle_detection/info', 10)
         
         # 初始化系统
         self._initialize_system()
@@ -228,9 +238,8 @@ class BottleDetectionNode(Node):
             self._publish_annotated_image(annotated_image, timestamp)
             
             # 发布瓶子检测结果
-            self._publish_detection_result(
-                nearest_bottle, len(valid_detections), 
-                frame_left.shape, timestamp)
+            self._publish_detection_results(
+                nearest_bottle, len(valid_detections), timestamp)
             
             # 更新FPS
             self._update_fps()
@@ -284,55 +293,67 @@ class BottleDetectionNode(Node):
         except Exception as e:
             self.get_logger().error(f'发布标注图像失败: {str(e)}')
     
-    def _publish_detection_result(self, nearest_bottle, bottle_count, 
-                                 image_shape, timestamp):
-        """发布瓶子检测结果"""
-        msg = BottleDetection()
-        msg.header.stamp = timestamp
-        msg.header.frame_id = 'left_camera'
+    def _publish_detection_results(self, nearest_bottle, bottle_count, timestamp):
+        """发布瓶子检测结果（使用标准消息类型）"""
         
-        msg.bottle_detected = nearest_bottle is not None
-        msg.bottle_count = bottle_count
-        msg.image_width = image_shape[1]
-        msg.image_height = image_shape[0]
+        # 发布瓶子数量
+        count_msg = Int32()
+        count_msg.data = bottle_count
+        self.bottle_count_pub.publish(count_msg)
         
         if nearest_bottle:
             detection = nearest_bottle['detection']
             distance = nearest_bottle['distance']
             position_3d = nearest_bottle['3d_position']
             
-            # 填充检测信息
-            left, top, right, bottom, score, cx, cy = detection
-            msg.nearest_bottle_x = cx
-            msg.nearest_bottle_y = cy
-            msg.bbox_left = left
-            msg.bbox_top = top
-            msg.bbox_right = right
-            msg.bbox_bottom = bottom
-            msg.confidence = score
-            msg.distance = distance
+            # 发布最近瓶子距离
+            distance_msg = Float32()
+            distance_msg.data = distance
+            self.bottle_distance_pub.publish(distance_msg)
             
-            # 填充3D位置（如果可用）
+            # 发布最近瓶子位置
             if position_3d is not None:
-                msg.position_x = float(position_3d[0] / 1000.0)  # 转换为米
-                msg.position_y = float(position_3d[1] / 1000.0)
-                msg.position_z = float(position_3d[2] / 1000.0)
+                position_msg = PointStamped()
+                position_msg.header.stamp = timestamp
+                position_msg.header.frame_id = 'left_camera'
+                position_msg.point.x = float(position_3d[0] / 1000.0)  # 转换为米
+                position_msg.point.y = float(position_3d[1] / 1000.0)
+                position_msg.point.z = float(position_3d[2] / 1000.0)
+                self.bottle_position_pub.publish(position_msg)
             
-            # 设置状态
-            if distance < 0.5:
-                msg.status = "距离过近"
-            elif distance > 3.0:
-                msg.status = "距离较远"
-            else:
-                msg.status = "正常"
+            # 发布详细信息（JSON格式）
+            left, top, right, bottom, score, cx, cy = detection
+            info = {
+                'bottle_detected': True,
+                'nearest_bottle': {
+                    'pixel_x': int(cx),
+                    'pixel_y': int(cy),
+                    'bbox': [int(left), int(top), int(right), int(bottom)],
+                    'confidence': float(score),
+                    'distance': float(distance),
+                    'status': '正常' if 0.5 <= distance <= 3.0 else ('距离过近' if distance < 0.5 else '距离较远')
+                },
+                'total_count': bottle_count,
+                'timestamp': time.time()
+            }
+            
+            info_msg = String()
+            info_msg.data = json.dumps(info, ensure_ascii=False)
+            self.detection_info_pub.publish(info_msg)
         else:
-            # 没有检测到瓶子时的默认值
-            msg.nearest_bottle_x = -1
-            msg.nearest_bottle_y = -1
-            msg.distance = -1.0
-            msg.status = "未检测到瓶子"
-        
-        self.bottle_detection_pub.publish(msg)
+            # 没有检测到瓶子
+            distance_msg = Float32()
+            distance_msg.data = -1.0
+            self.bottle_distance_pub.publish(distance_msg)
+            
+            info = {
+                'bottle_detected': False,
+                'total_count': 0,
+                'timestamp': time.time()
+            }
+            info_msg = String()
+            info_msg.data = json.dumps(info, ensure_ascii=False)
+            self.detection_info_pub.publish(info_msg)
     
     def _update_fps(self):
         """更新FPS计算"""
