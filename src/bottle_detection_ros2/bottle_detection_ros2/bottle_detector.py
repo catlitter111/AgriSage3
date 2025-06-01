@@ -7,7 +7,7 @@
 
 import cv2
 import numpy as np
-from rknn.api import RKNN
+from rknnlite.api import RKNNLite
 
 # YOLO检测参数
 OBJ_THRESH = 0.25  # 目标检测阈值
@@ -54,7 +54,7 @@ class BottleDetector:
         """
         try:
             # 创建RKNN对象
-            self.rknn = RKNN()
+            self.rknn = RKNNLite()
             
             # 加载RKNN模型
             ret = self.rknn.load_rknn(self.model_path)
