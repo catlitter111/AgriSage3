@@ -35,8 +35,10 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            # 主节点入口
+            # 原始同步节点入口
             'bottle_detection_node = bottle_detection_ros2.bottle_detection_node:main',
+            # 新的异步节点入口
+            'bottle_detection_node_async = bottle_detection_ros2.bottle_detection_node_async:main',
         ],
     },
 )
