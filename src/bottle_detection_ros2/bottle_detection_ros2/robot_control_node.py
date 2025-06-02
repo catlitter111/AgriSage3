@@ -11,7 +11,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Twist, PoseStamped
 from std_msgs.msg import String, Bool
 from bottle_detection_msgs.msg import RobotCommand, RobotStatus
-import serial
+from serial import Serial
 import threading
 import json
 import time
@@ -110,7 +110,7 @@ class RobotControlNode(Node):
     def connect_serial(self):
         """连接串口"""
         try:
-            self.serial = serial.Serial(
+            self.serial = Serial(
                 port=self.serial_port,
                 baudrate=self.baudrate,
                 timeout=self.timeout

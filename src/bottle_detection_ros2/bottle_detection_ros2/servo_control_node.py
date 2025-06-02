@@ -10,7 +10,7 @@ from rclpy.node import Node
 from std_msgs.msg import Float32, Int32, Bool, String
 from geometry_msgs.msg import Point
 from bottle_detection_msgs.msg import HarvestCommand, ServoCommand, ServoStatus
-import serial
+from serial import Serial
 import threading
 import time
 import json
@@ -141,7 +141,7 @@ class ServoControlNode(Node):
     def connect_serial(self):
         """连接串口"""
         try:
-            self.serial = serial.Serial(
+            self.serial = Serial(
                 port=self.serial_port,
                 baudrate=self.baudrate,
                 timeout=self.timeout
