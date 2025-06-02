@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-集成瓶子检测节点
+集成瓶子检测节点 - 带完整错误追踪版本
 整合了异步瓶子检测、双目深度估计、视频质量控制等功能
 支持手动和自动两种工作模式
 """
@@ -10,6 +10,7 @@ import rclpy
 import traceback
 import sys
 import logging
+from functools import wraps
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image, CompressedImage
@@ -31,7 +32,11 @@ from .utils import MedianFilter
 # 设置详细日志
 logging.basicConfig(
     level=logging.DEBUG,
-    format='%(asctime)s - [%(filename)s:%(lineno)d] - %(levelname)s - %(message)s'
+    format='%(asctime)s - [%(filename)s:%(lineno)d] - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('/tmp/bottle_detection_debug.log')
+    ]
 )
 logger = logging.getLogger(__name__)
 
@@ -45,11 +50,53 @@ def exception_handler(exc_type, exc_value, exc_traceback):
 
 sys.excepthook = exception_handler
 
+# 错误追踪装饰器
+def trace_errors(func):
+    """为方法添加详细的错误追踪"""
+    @wraps(func)
+    def wrapper(self, *args, **kwargs):
+        try:
+            logger.debug(f">>> 进入方法: {func.__name__}")
+            result = func(self, *args, **kwargs)
+            logger.debug(f"<<< 成功退出方法: {func.__name__}")
+            return result
+        except Exception as e:
+            logger.error(f"!!! 方法 {func.__name__} 发生错误 !!!")
+            logger.error(f"错误类型: {type(e).__name__}")
+            logger.error(f"错误信息: {str(e)}")
+            logger.error(f"参数信息: args数量={len(args)}, kwargs={list(kwargs.keys())}")
+            
+            # 打印参数详情（小心大数据）
+            for i, arg in enumerate(args[:3]):  # 只打印前3个参数
+                if hasattr(arg, 'shape'):  # numpy数组
+                    logger.error(f"  args[{i}]: numpy数组, shape={arg.shape}, dtype={arg.dtype}")
+                elif isinstance(arg, list) and len(arg) > 0:
+                    logger.error(f"  args[{i}]: 列表, 长度={len(arg)}, 第一个元素类型={type(arg[0])}")
+                else:
+                    arg_str = str(arg)
+                    if len(arg_str) > 100:
+                        arg_str = arg_str[:100] + '...'
+                    logger.error(f"  args[{i}]: {arg_str}")
+            
+            logger.error("详细堆栈信息:")
+            logger.error(traceback.format_exc())
+            logger.error("-" * 80)
+            
+            raise
+    return wrapper
+
 class IntegratedBottleDetectionNode(Node):
     """集成瓶子检测节点类"""
     
+    @trace_errors
     def __init__(self):
         super().__init__('integrated_bottle_detection_node')
+        logger.info("="*80)
+        logger.info("初始化集成瓶子检测节点...")
+        logger.info(f"Python版本: {sys.version}")
+        logger.info(f"NumPy版本: {np.__version__}")
+        logger.info(f"OpenCV版本: {cv2.__version__}")
+        logger.info("="*80)
         
         # 声明参数
         self._declare_parameters()
@@ -144,8 +191,10 @@ class IntegratedBottleDetectionNode(Node):
             f'发布频率: {self.publish_rate} Hz'
         )
     
+    @trace_errors
     def _declare_parameters(self):
         """声明ROS2参数"""
+        logger.debug("声明ROS2参数...")
         # 相机参数
         self.declare_parameter('camera_id', 1)
         self.declare_parameter('camera_width', 1280)
@@ -176,8 +225,10 @@ class IntegratedBottleDetectionNode(Node):
         # 舵机跟踪参数
         self.declare_parameter('enable_servo_tracking', True)
     
+    @trace_errors
     def _get_parameters(self):
         """获取参数值"""
+        logger.debug("获取参数值...")
         self.camera_id = self.get_parameter('camera_id').value
         self.camera_width = self.get_parameter('camera_width').value
         self.camera_height = self.get_parameter('camera_height').value
@@ -200,9 +251,14 @@ class IntegratedBottleDetectionNode(Node):
         self.queue_size = self.get_parameter('queue_size').value
         
         self.enable_servo_tracking = self.get_parameter('enable_servo_tracking').value
+        
+        logger.debug(f"参数: camera_id={self.camera_id}, model_path={self.model_path}, "
+                    f"confidence_threshold={self.confidence_threshold}")
     
+    @trace_errors
     def _create_publishers(self, qos_profile):
         """创建发布者"""
+        logger.debug("创建发布者...")
         # 图像发布者
         self.left_image_pub = self.create_publisher(
             Image, 'camera/left/image_raw', qos_profile)
@@ -231,8 +287,10 @@ class IntegratedBottleDetectionNode(Node):
         self.tracking_target_pub = self.create_publisher(
             Point, 'servo/tracking_target', 10)
     
+    @trace_errors
     def _create_subscribers(self):
         """创建订阅者"""
+        logger.debug("创建订阅者...")
         # 模式控制订阅
         self.mode_sub = self.create_subscription(
             String,
@@ -249,8 +307,10 @@ class IntegratedBottleDetectionNode(Node):
             10
         )
     
+    @trace_errors
     def _initialize_system(self):
         """初始化系统组件"""
+        logger.debug("初始化系统组件...")
         # 打开相机
         if not self.stereo_camera.open_camera():
             self.get_logger().error('无法打开相机，节点将退出')
@@ -270,6 +330,7 @@ class IntegratedBottleDetectionNode(Node):
         
         self.get_logger().info('系统初始化完成')
     
+    @trace_errors
     def _prefill_pipeline(self):
         """预填充处理管道"""
         self.get_logger().info('预填充处理管道...')
@@ -286,132 +347,248 @@ class IntegratedBottleDetectionNode(Node):
                 'timestamp': self.get_clock().now().to_msg()
             }
     
+    @trace_errors
     def timer_callback(self):
         """定时器回调函数"""
-        with self.lock:
-            # 读取双目图像
-            frame_left, frame_right = self.stereo_camera.capture_frame()
-            if frame_left is None or frame_right is None:
-                self.get_logger().warn('无法读取相机图像', throttle_duration_sec=1.0)
-                return
-            
-            timestamp = self.get_clock().now().to_msg()
-            
-            # 提交新帧到异步处理队列
-            if not self.bottle_detector_pool.is_full():
-                frame_id = self.bottle_detector_pool.put(frame_left)
+        try:
+            with self.lock:
+                # 读取双目图像
+                frame_left, frame_right = self.stereo_camera.capture_frame()
+                if frame_left is None or frame_right is None:
+                    self.get_logger().warn('无法读取相机图像', throttle_duration_sec=1.0)
+                    return
                 
-                self.frame_data_cache[frame_id] = {
-                    'left': frame_left.copy(),
-                    'right': frame_right.copy(),
-                    'timestamp': timestamp
-                }
+                timestamp = self.get_clock().now().to_msg()
                 
-                # 清理过期缓存
-                if len(self.frame_data_cache) > self.max_cache_size:
-                    oldest_id = min(self.frame_data_cache.keys())
-                    del self.frame_data_cache[oldest_id]
-            
-            # 尝试获取处理结果
-            result_frame_id, result, success = self.bottle_detector_pool.get(timeout=0.001)
-            
-            if success and result is not None:
-                _, _, bottle_detections = result
-                
-                if result_frame_id in self.frame_data_cache:
-                    frame_data = self.frame_data_cache[result_frame_id]
-                    cached_left = frame_data['left']
-                    cached_right = frame_data['right']
-                    cached_timestamp = frame_data['timestamp']
+                # 提交新帧到异步处理队列
+                if not self.bottle_detector_pool.is_full():
+                    frame_id = self.bottle_detector_pool.put(frame_left)
                     
-                    del self.frame_data_cache[result_frame_id]
+                    self.frame_data_cache[frame_id] = {
+                        'left': frame_left.copy(),
+                        'right': frame_right.copy(),
+                        'timestamp': timestamp
+                    }
                     
-                    # 处理检测结果
-                    self._process_detection_result(
-                        cached_left, cached_right, bottle_detections, cached_timestamp)
-            
-            # 更新FPS
-            self._update_fps()
+                    # 清理过期缓存
+                    if len(self.frame_data_cache) > self.max_cache_size:
+                        oldest_id = min(self.frame_data_cache.keys())
+                        del self.frame_data_cache[oldest_id]
+                
+                # 尝试获取处理结果
+                result_frame_id, result, success = self.bottle_detector_pool.get(timeout=0.001)
+                
+                if success and result is not None:
+                    _, _, bottle_detections = result
+                    
+                    if result_frame_id in self.frame_data_cache:
+                        frame_data = self.frame_data_cache[result_frame_id]
+                        cached_left = frame_data['left']
+                        cached_right = frame_data['right']
+                        cached_timestamp = frame_data['timestamp']
+                        
+                        del self.frame_data_cache[result_frame_id]
+                        
+                        # 处理检测结果
+                        self._process_detection_result(
+                            cached_left, cached_right, bottle_detections, cached_timestamp)
+                
+                # 更新FPS
+                self._update_fps()
+                
+        except Exception as e:
+            logger.error(f"timer_callback异常: {e}")
+            logger.error(traceback.format_exc())
+            # 继续运行，不让节点崩溃
+            self.get_logger().error(f"处理帧时出错，跳过此帧: {e}")
     
+    def _safe_to_scalar(self, value, name="value", as_int=False):
+        """安全地将值转换为标量，带详细日志"""
+        try:
+            logger.debug(f"转换 {name}: 输入类型={type(value)}, 值={value}")
+            
+            # 检查是否已经是标量
+            if isinstance(value, (int, float)):
+                result = int(value) if as_int else float(value)
+                logger.debug(f"  {name} 已是标量，结果={result}")
+                return result
+            
+            # 检查是否是numpy标量
+            if isinstance(value, np.generic):
+                result = int(value.item()) if as_int else float(value.item())
+                logger.debug(f"  {name} 是numpy标量，结果={result}")
+                return result
+            
+            # 检查是否是numpy数组
+            if isinstance(value, np.ndarray):
+                logger.debug(f"  {name} 是numpy数组: shape={value.shape}, dtype={value.dtype}")
+                if value.size == 1:
+                    result = int(value.item()) if as_int else float(value.item())
+                    logger.debug(f"  {name} 单元素数组，结果={result}")
+                    return result
+                elif value.size > 1:
+                    # 多元素数组，取第一个元素
+                    logger.warning(f"  {name} 多元素数组 shape={value.shape}，取第一个元素")
+                    result = int(value.flat[0]) if as_int else float(value.flat[0])
+                    return result
+                else:
+                    logger.error(f"  {name} 空数组!")
+                    return 0 if as_int else 0.0
+            
+            # 尝试直接转换
+            result = int(value) if as_int else float(value)
+            logger.debug(f"  {name} 直接转换结果={result}")
+            return result
+            
+        except Exception as e:
+            logger.error(f"转换 {name} 失败: {e}")
+            logger.error(f"值详情: type={type(value)}, value={value}")
+            if hasattr(value, '__dict__'):
+                logger.error(f"  对象属性: {value.__dict__}")
+            return 0 if as_int else 0.0
+    
+    @trace_errors
     def _process_detection_result(self, frame_left, frame_right, bottle_detections, timestamp):
         """处理检测结果并发布"""
-        # 校正图像
-        frame_left_rectified, img_left_gray, img_right_gray = \
-            self.stereo_camera.rectify_stereo_images(frame_left, frame_right)
+        logger.info(f"处理检测结果: 检测数量={len(bottle_detections) if bottle_detections else 0}")
         
-        # 计算视差和3D点云
-        disparity, disp_normalized = self.stereo_camera.compute_disparity(
-            img_left_gray, img_right_gray)
-        threeD = self.stereo_camera.compute_3d_points(disparity)
-        
-        # 处理检测结果
-        annotated_image = frame_left.copy()
-        nearest_bottle = None
-        min_distance = float('inf')
-        
-        # 计算每个瓶子的距离
-        valid_detections = []
-        for detection in bottle_detections:
-            try:
-                # 确保解包的值都是标量
-                left, top, right, bottom, score, cx, cy = detection
-                
-                # 转换为标量值（如果是数组的话）
-                score = float(score) if hasattr(score, '__float__') else float(score.item()) if hasattr(score, 'item') else float(score)
-                cx = int(cx) if hasattr(cx, '__int__') else int(cx.item()) if hasattr(cx, 'item') else int(cx)
-                cy = int(cy) if hasattr(cy, '__int__') else int(cy.item()) if hasattr(cy, 'item') else int(cy)
-                
-                if score < self.confidence_threshold:
-                    continue
-                
-                # 计算距离
-                distance = self.stereo_camera.get_bottle_distance(threeD, cx, cy)
-                
-                if distance is not None:
-                    # 确保distance是标量
-                    distance = float(distance) if hasattr(distance, '__float__') else float(distance.item()) if hasattr(distance, 'item') else float(distance)
+        try:
+            # 校正图像
+            frame_left_rectified, img_left_gray, img_right_gray = \
+                self.stereo_camera.rectify_stereo_images(frame_left, frame_right)
+            
+            # 计算视差和3D点云
+            disparity, disp_normalized = self.stereo_camera.compute_disparity(
+                img_left_gray, img_right_gray)
+            threeD = self.stereo_camera.compute_3d_points(disparity)
+            
+            # 处理检测结果
+            annotated_image = frame_left.copy()
+            nearest_bottle = None
+            min_distance = float('inf')
+            
+            # 计算每个瓶子的距离
+            valid_detections = []
+            
+            for idx, detection in enumerate(bottle_detections):
+                try:
+                    logger.debug(f"\n处理检测 {idx}:")
+                    logger.debug(f"  原始数据: {detection}")
+                    logger.debug(f"  数据类型: {type(detection)}")
+                    logger.debug(f"  数据长度: {len(detection) if hasattr(detection, '__len__') else 'N/A'}")
                     
-                    if self.min_distance <= distance <= self.max_distance:
-                        # 应用距离滤波
-                        filtered_distance = self.distance_filter.update(distance)
+                    # 打印每个元素的详细信息
+                    if hasattr(detection, '__iter__'):
+                        for i, item in enumerate(detection):
+                            logger.debug(f"    [{i}]: type={type(item).__name__}, "
+                                       f"value={item}, "
+                                       f"is_array={isinstance(item, np.ndarray)}, "
+                                       f"shape={getattr(item, 'shape', 'N/A')}")
+                    
+                    # 解包检测结果
+                    if len(detection) < 7:
+                        logger.warning(f"检测结果长度不足: {len(detection)} < 7")
+                        continue
+                    
+                    left, top, right, bottom, score, cx, cy = detection[:7]
+                    
+                    # 记录原始类型
+                    logger.debug(f"  解包后原始类型:")
+                    logger.debug(f"    score: {type(score)} = {score}")
+                    logger.debug(f"    cx: {type(cx)} = {cx}")
+                    logger.debug(f"    cy: {type(cy)} = {cy}")
+                    
+                    # 安全转换为标量
+                    score = self._safe_to_scalar(score, "score")
+                    cx = self._safe_to_scalar(cx, "cx", as_int=True)
+                    cy = self._safe_to_scalar(cy, "cy", as_int=True)
+                    left = self._safe_to_scalar(left, "left", as_int=True)
+                    top = self._safe_to_scalar(top, "top", as_int=True)
+                    right = self._safe_to_scalar(right, "right", as_int=True)
+                    bottom = self._safe_to_scalar(bottom, "bottom", as_int=True)
+                    
+                    logger.debug(f"  转换后的值:")
+                    logger.debug(f"    score: {type(score)} = {score}")
+                    logger.debug(f"    cx: {type(cx)} = {cx}")
+                    logger.debug(f"    cy: {type(cy)} = {cy}")
+                    
+                    # 比较置信度
+                    logger.debug(f"  置信度比较: {score} < {self.confidence_threshold} ?")
+                    if score < self.confidence_threshold:
+                        logger.debug(f"  跳过低置信度检测")
+                        continue
+                    
+                    # 计算距离
+                    distance = self.stereo_camera.get_bottle_distance(threeD, cx, cy)
+                    logger.debug(f"  原始距离: type={type(distance)}, value={distance}")
+                    
+                    if distance is not None:
+                        distance = self._safe_to_scalar(distance, "distance")
+                        logger.debug(f"  转换后距离: {distance}")
                         
-                        valid_detections.append({
-                            'detection': (int(left), int(top), int(right), int(bottom), float(score), int(cx), int(cy)),
-                            'distance': float(filtered_distance),
-                            '3d_position': threeD[cy][cx] if threeD is not None else None
-                        })
-                        
-                        if filtered_distance < min_distance:
-                            min_distance = filtered_distance
-                            nearest_bottle = valid_detections[-1]
+                        # 距离范围检查
+                        logger.debug(f"  距离范围检查: {self.min_distance} <= {distance} <= {self.max_distance}")
+                        if self.min_distance <= distance <= self.max_distance:
+                            # 应用距离滤波
+                            filtered_distance = self.distance_filter.update(distance)
+                            logger.debug(f"  滤波后距离: {filtered_distance}")
                             
-            except Exception as e:
-                self.get_logger().warn(f'处理检测结果时出错: {e}', throttle_duration_sec=1.0)
-                continue
-        
-        # 更新全局状态
-        self.bottle_detections_with_distance = valid_detections
-        self.nearest_bottle_distance = min_distance if nearest_bottle else None
-        
-        # 在图像上绘制检测结果
-        self._draw_detections_on_image(annotated_image, valid_detections)
-        
-        # 添加状态信息
-        self._draw_status_info(annotated_image)
-        
-        # 发布结果
-        self._publish_raw_images(frame_left, frame_right, timestamp)
-        self._publish_annotated_image(annotated_image, timestamp)
-        self._publish_detection_results(nearest_bottle, len(valid_detections), timestamp)
-        
-        # 手动模式下的舵机跟踪
-        if self.current_mode == "manual" and self.enable_servo_tracking and nearest_bottle:
-            self._publish_tracking_target(nearest_bottle)
-        
-        # 显示图像
-        if self.show_display:
-            self._display_images(annotated_image, disp_normalized)
+                            valid_detections.append({
+                                'detection': (int(left), int(top), int(right), int(bottom), 
+                                            float(score), int(cx), int(cy)),
+                                'distance': float(filtered_distance),
+                                '3d_position': threeD[cy][cx] if threeD is not None else None
+                            })
+                            
+                            if filtered_distance < min_distance:
+                                min_distance = filtered_distance
+                                nearest_bottle = valid_detections[-1]
+                        else:
+                            logger.debug(f"  距离超出范围，跳过")
+                    else:
+                        logger.debug(f"  无效距离，跳过")
+                        
+                except Exception as e:
+                    logger.error(f"处理检测 {idx} 时出错:")
+                    logger.error(f"  检测数据: {detection}")
+                    logger.error(f"  错误类型: {type(e).__name__}")
+                    logger.error(f"  错误信息: {str(e)}")
+                    logger.error(traceback.format_exc())
+                    continue
+            
+            logger.info(f"有效检测数: {len(valid_detections)}")
+            
+            # 更新全局状态
+            self.bottle_detections_with_distance = valid_detections
+            self.nearest_bottle_distance = min_distance if nearest_bottle else None
+            
+            # 在图像上绘制检测结果
+            self._draw_detections_on_image(annotated_image, valid_detections)
+            
+            # 添加状态信息
+            self._draw_status_info(annotated_image)
+            
+            # 发布结果
+            self._publish_raw_images(frame_left, frame_right, timestamp)
+            self._publish_annotated_image(annotated_image, timestamp)
+            self._publish_detection_results(nearest_bottle, len(valid_detections), timestamp)
+            
+            # 手动模式下的舵机跟踪
+            if self.current_mode == "manual" and self.enable_servo_tracking and nearest_bottle:
+                self._publish_tracking_target(nearest_bottle)
+            
+            # 显示图像
+            if self.show_display:
+                self._display_images(annotated_image, disp_normalized)
+                
+        except Exception as e:
+            logger.error("_process_detection_result 主体出错:")
+            logger.error(f"错误类型: {type(e).__name__}")
+            logger.error(f"错误信息: {str(e)}")
+            logger.error(traceback.format_exc())
+            raise
     
+    @trace_errors
     def _draw_detections_on_image(self, image, valid_detections):
         """在图像上绘制检测结果"""
         for valid_det in valid_detections:
@@ -436,6 +613,7 @@ class IntegratedBottleDetectionNode(Node):
             # 绘制中心点
             cv2.circle(image, (int(cx), int(cy)), 5, (255, 0, 0), -1)
     
+    @trace_errors
     def _draw_status_info(self, image):
         """在图像上绘制状态信息"""
         # FPS
@@ -454,6 +632,7 @@ class IntegratedBottleDetectionNode(Node):
         cv2.putText(image, queue_text, (10, 90), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
     
+    @trace_errors
     def _publish_raw_images(self, left_image, right_image, timestamp):
         """发布原始图像"""
         try:
@@ -471,7 +650,9 @@ class IntegratedBottleDetectionNode(Node):
             
         except Exception as e:
             self.get_logger().error(f'发布原始图像失败: {e}')
+            logger.error(traceback.format_exc())
     
+    @trace_errors
     def _publish_annotated_image(self, image, timestamp):
         """发布标注图像"""
         try:
@@ -497,100 +678,108 @@ class IntegratedBottleDetectionNode(Node):
                 
         except Exception as e:
             self.get_logger().error(f'发布标注图像失败: {e}')
+            logger.error(traceback.format_exc())
     
+    @trace_errors
     def _publish_detection_results(self, nearest_bottle, bottle_count, timestamp):
         """发布检测结果"""
-        # 发布瓶子数量
-        count_msg = Int32()
-        count_msg.data = bottle_count
-        self.bottle_count_pub.publish(count_msg)
-        
-        if nearest_bottle:
-            detection = nearest_bottle['detection']
-            distance = nearest_bottle['distance']
-            position_3d = nearest_bottle['3d_position']
-            left, top, right, bottom, score, cx, cy = detection
+        try:
+            # 发布瓶子数量
+            count_msg = Int32()
+            count_msg.data = bottle_count
+            self.bottle_count_pub.publish(count_msg)
             
-            # 发布距离
-            distance_msg = Float32()
-            distance_msg.data = distance
-            self.bottle_distance_pub.publish(distance_msg)
+            if nearest_bottle:
+                detection = nearest_bottle['detection']
+                distance = nearest_bottle['distance']
+                position_3d = nearest_bottle['3d_position']
+                left, top, right, bottom, score, cx, cy = detection
+                
+                # 发布距离
+                distance_msg = Float32()
+                distance_msg.data = distance
+                self.bottle_distance_pub.publish(distance_msg)
+                
+                # 发布3D位置
+                if position_3d is not None:
+                    position_msg = PointStamped()
+                    position_msg.header.stamp = timestamp
+                    position_msg.header.frame_id = 'left_camera'
+                    position_msg.point.x = float(position_3d[0] / 1000.0)
+                    position_msg.point.y = float(position_3d[1] / 1000.0)
+                    position_msg.point.z = float(position_3d[2] / 1000.0)
+                    self.bottle_position_pub.publish(position_msg)
+                
+                # 发布详细信息
+                info = {
+                    'bottle_detected': True,
+                    'nearest_bottle': {
+                        'pixel_x': int(cx),
+                        'pixel_y': int(cy),
+                        'bbox': [int(left), int(top), int(right), int(bottom)],
+                        'confidence': float(score),
+                        'distance': float(distance),
+                        'status': self._get_distance_status(distance)
+                    },
+                    'total_count': bottle_count,
+                    'fps': float(self.current_fps),
+                    'timestamp': time.time()
+                }
+                
+                # 发布自定义消息
+                detection_msg = BottleDetection()
+                detection_msg.header.stamp = timestamp
+                detection_msg.header.frame_id = 'left_camera'
+                detection_msg.bottle_detected = True
+                detection_msg.bottle_count = bottle_count
+                detection_msg.nearest_bottle_x = int(cx)
+                detection_msg.nearest_bottle_y = int(cy)
+                detection_msg.bbox_left = int(left)
+                detection_msg.bbox_top = int(top)
+                detection_msg.bbox_right = int(right)
+                detection_msg.bbox_bottom = int(bottom)
+                detection_msg.confidence = float(score)
+                detection_msg.distance = float(distance)
+                detection_msg.position_x = float(position_3d[0] / 1000.0) if position_3d else 0.0
+                detection_msg.position_y = float(position_3d[1] / 1000.0) if position_3d else 0.0
+                detection_msg.position_z = float(position_3d[2] / 1000.0) if position_3d else 0.0
+                detection_msg.image_width = self.camera_width // 2
+                detection_msg.image_height = self.camera_height
+                detection_msg.status = self._get_distance_status(distance)
+                self.bottle_detection_pub.publish(detection_msg)
+            else:
+                # 没有检测到瓶子
+                distance_msg = Float32()
+                distance_msg.data = -1.0
+                self.bottle_distance_pub.publish(distance_msg)
+                
+                info = {
+                    'bottle_detected': False,
+                    'total_count': 0,
+                    'fps': float(self.current_fps),
+                    'timestamp': time.time()
+                }
+                
+                # 发布空的检测消息
+                detection_msg = BottleDetection()
+                detection_msg.header.stamp = timestamp
+                detection_msg.header.frame_id = 'left_camera'
+                detection_msg.bottle_detected = False
+                detection_msg.bottle_count = 0
+                detection_msg.distance = -1.0
+                detection_msg.status = "未检测到目标"
+                self.bottle_detection_pub.publish(detection_msg)
             
-            # 发布3D位置
-            if position_3d is not None:
-                position_msg = PointStamped()
-                position_msg.header.stamp = timestamp
-                position_msg.header.frame_id = 'left_camera'
-                position_msg.point.x = float(position_3d[0] / 1000.0)
-                position_msg.point.y = float(position_3d[1] / 1000.0)
-                position_msg.point.z = float(position_3d[2] / 1000.0)
-                self.bottle_position_pub.publish(position_msg)
+            # 发布JSON信息
+            info_msg = String()
+            info_msg.data = json.dumps(info, ensure_ascii=False)
+            self.detection_info_pub.publish(info_msg)
             
-            # 发布详细信息
-            info = {
-                'bottle_detected': True,
-                'nearest_bottle': {
-                    'pixel_x': int(cx),
-                    'pixel_y': int(cy),
-                    'bbox': [int(left), int(top), int(right), int(bottom)],
-                    'confidence': float(score),
-                    'distance': float(distance),
-                    'status': self._get_distance_status(distance)
-                },
-                'total_count': bottle_count,
-                'fps': float(self.current_fps),
-                'timestamp': time.time()
-            }
-            
-            # 发布自定义消息
-            detection_msg = BottleDetection()
-            detection_msg.header.stamp = timestamp
-            detection_msg.header.frame_id = 'left_camera'
-            detection_msg.bottle_detected = True
-            detection_msg.bottle_count = bottle_count
-            detection_msg.nearest_bottle_x = int(cx)
-            detection_msg.nearest_bottle_y = int(cy)
-            detection_msg.bbox_left = int(left)
-            detection_msg.bbox_top = int(top)
-            detection_msg.bbox_right = int(right)
-            detection_msg.bbox_bottom = int(bottom)
-            detection_msg.confidence = float(score)
-            detection_msg.distance = float(distance)
-            detection_msg.position_x = float(position_3d[0] / 1000.0) if position_3d else 0.0
-            detection_msg.position_y = float(position_3d[1] / 1000.0) if position_3d else 0.0
-            detection_msg.position_z = float(position_3d[2] / 1000.0) if position_3d else 0.0
-            detection_msg.image_width = self.camera_width // 2
-            detection_msg.image_height = self.camera_height
-            detection_msg.status = self._get_distance_status(distance)
-            self.bottle_detection_pub.publish(detection_msg)
-        else:
-            # 没有检测到瓶子
-            distance_msg = Float32()
-            distance_msg.data = -1.0
-            self.bottle_distance_pub.publish(distance_msg)
-            
-            info = {
-                'bottle_detected': False,
-                'total_count': 0,
-                'fps': float(self.current_fps),
-                'timestamp': time.time()
-            }
-            
-            # 发布空的检测消息
-            detection_msg = BottleDetection()
-            detection_msg.header.stamp = timestamp
-            detection_msg.header.frame_id = 'left_camera'
-            detection_msg.bottle_detected = False
-            detection_msg.bottle_count = 0
-            detection_msg.distance = -1.0
-            detection_msg.status = "未检测到目标"
-            self.bottle_detection_pub.publish(detection_msg)
-        
-        # 发布JSON信息
-        info_msg = String()
-        info_msg.data = json.dumps(info, ensure_ascii=False)
-        self.detection_info_pub.publish(info_msg)
+        except Exception as e:
+            logger.error(f"发布检测结果失败: {e}")
+            logger.error(traceback.format_exc())
     
+    @trace_errors
     def _publish_tracking_target(self, nearest_bottle):
         """发布舵机跟踪目标"""
         detection = nearest_bottle['detection']
@@ -603,8 +792,12 @@ class IntegratedBottleDetectionNode(Node):
         
         self.tracking_target_pub.publish(tracking_msg)
     
+    @trace_errors
     def _get_distance_status(self, distance):
         """根据距离返回状态描述"""
+        # 确保distance是标量
+        distance = self._safe_to_scalar(distance, "distance_status")
+        
         if distance < 0.5:
             return "距离过近"
         elif distance < 0.8:
@@ -616,6 +809,7 @@ class IntegratedBottleDetectionNode(Node):
         else:
             return "距离过远"
     
+    @trace_errors
     def _update_fps(self):
         """更新FPS计算"""
         self.frame_count += 1
@@ -626,6 +820,7 @@ class IntegratedBottleDetectionNode(Node):
             self.frame_count = 0
             self.last_fps_time = current_time
     
+    @trace_errors
     def _display_images(self, annotated_image, disparity):
         """显示图像窗口"""
         cv2.imshow('Bottle Detection', annotated_image)
@@ -635,6 +830,7 @@ class IntegratedBottleDetectionNode(Node):
             self.get_logger().info('用户请求退出')
             rclpy.shutdown()
     
+    @trace_errors
     def mode_callback(self, msg):
         """模式更新回调"""
         try:
@@ -648,7 +844,9 @@ class IntegratedBottleDetectionNode(Node):
             )
         except Exception as e:
             self.get_logger().error(f'解析模式数据错误: {e}')
+            logger.error(traceback.format_exc())
     
+    @trace_errors
     def quality_callback(self, msg):
         """视频质量更新回调"""
         quality = msg.data
@@ -658,6 +856,7 @@ class IntegratedBottleDetectionNode(Node):
         else:
             self.get_logger().warn(f'未知的质量预设: {quality}')
     
+    @trace_errors
     def destroy_node(self):
         """清理资源"""
         self.get_logger().info('正在清理资源...')
@@ -675,19 +874,37 @@ class IntegratedBottleDetectionNode(Node):
 
 
 def main(args=None):
+    logger.info("="*80)
+    logger.info("启动瓶子检测主程序...")
+    logger.info("="*80)
+    
     rclpy.init(args=args)
     
     try:
         node = IntegratedBottleDetectionNode()
         rclpy.spin(node)
     except KeyboardInterrupt:
-        pass
+        logger.info("用户中断 (Ctrl+C)")
     except Exception as e:
-        print(f'节点运行出错: {e}')
+        logger.critical("主程序发生致命错误!")
+        logger.critical(f"错误类型: {type(e).__name__}")
+        logger.critical(f"错误信息: {str(e)}")
+        logger.critical("详细堆栈:")
+        logger.critical(traceback.format_exc())
+        
+        # 打印系统信息
+        import platform
+        logger.critical(f"Python版本: {sys.version}")
+        logger.critical(f"平台: {platform.platform()}")
+        logger.critical(f"NumPy版本: {np.__version__}")
+        logger.critical(f"OpenCV版本: {cv2.__version__}")
+        logger.critical(f"ROS2分发版: {os.environ.get('ROS_DISTRO', 'unknown')}")
+        
     finally:
         if 'node' in locals():
             node.destroy_node()
         rclpy.shutdown()
+        logger.info("程序已退出")
 
 
 if __name__ == '__main__':
