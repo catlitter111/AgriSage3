@@ -7,6 +7,9 @@
 """
 
 import rclpy
+import traceback
+import sys
+import logging
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image, CompressedImage
@@ -24,6 +27,23 @@ from .stereo_camera import StereoCamera
 from .bottle_rknn_pool import BottleRKNNPoolExecutor
 from .bottle_detector_async import detect_bottle_async, draw_detections
 from .utils import MedianFilter
+
+# 设置详细日志
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - [%(filename)s:%(lineno)d] - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# 设置全局异常处理
+def exception_handler(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    
+    logger.error("未捕获的异常:", exc_info=(exc_type, exc_value, exc_traceback))
+
+sys.excepthook = exception_handler
 
 class IntegratedBottleDetectionNode(Node):
     """集成瓶子检测节点类"""
@@ -332,27 +352,42 @@ class IntegratedBottleDetectionNode(Node):
         # 计算每个瓶子的距离
         valid_detections = []
         for detection in bottle_detections:
-            left, top, right, bottom, score, cx, cy = detection
-            
-            if score < self.confidence_threshold:
+            try:
+                # 确保解包的值都是标量
+                left, top, right, bottom, score, cx, cy = detection
+                
+                # 转换为标量值（如果是数组的话）
+                score = float(score) if hasattr(score, '__float__') else float(score.item()) if hasattr(score, 'item') else float(score)
+                cx = int(cx) if hasattr(cx, '__int__') else int(cx.item()) if hasattr(cx, 'item') else int(cx)
+                cy = int(cy) if hasattr(cy, '__int__') else int(cy.item()) if hasattr(cy, 'item') else int(cy)
+                
+                if score < self.confidence_threshold:
+                    continue
+                
+                # 计算距离
+                distance = self.stereo_camera.get_bottle_distance(threeD, cx, cy)
+                
+                if distance is not None:
+                    # 确保distance是标量
+                    distance = float(distance) if hasattr(distance, '__float__') else float(distance.item()) if hasattr(distance, 'item') else float(distance)
+                    
+                    if self.min_distance <= distance <= self.max_distance:
+                        # 应用距离滤波
+                        filtered_distance = self.distance_filter.update(distance)
+                        
+                        valid_detections.append({
+                            'detection': (int(left), int(top), int(right), int(bottom), float(score), int(cx), int(cy)),
+                            'distance': float(filtered_distance),
+                            '3d_position': threeD[cy][cx] if threeD is not None else None
+                        })
+                        
+                        if filtered_distance < min_distance:
+                            min_distance = filtered_distance
+                            nearest_bottle = valid_detections[-1]
+                            
+            except Exception as e:
+                self.get_logger().warn(f'处理检测结果时出错: {e}', throttle_duration_sec=1.0)
                 continue
-            
-            # 计算距离
-            distance = self.stereo_camera.get_bottle_distance(threeD, cx, cy)
-            
-            if distance and self.min_distance <= distance <= self.max_distance:
-                # 应用距离滤波
-                filtered_distance = self.distance_filter.update(distance)
-                
-                valid_detections.append({
-                    'detection': detection,
-                    'distance': filtered_distance,
-                    '3d_position': threeD[cy][cx] if threeD is not None else None
-                })
-                
-                if filtered_distance < min_distance:
-                    min_distance = filtered_distance
-                    nearest_bottle = valid_detections[-1]
         
         # 更新全局状态
         self.bottle_detections_with_distance = valid_detections
