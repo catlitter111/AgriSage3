@@ -4,13 +4,14 @@
 from setuptools import setup
 import os
 from glob import glob
+from setuptools import setup, find_packages
 
 package_name = 'bottle_detection_ros2'
 
 setup(
     name=package_name,
     version='1.0.0',
-    packages=[package_name],
+    packages=find_packages(exclude=['test']),
     data_files=[
         # 安装package.xml
         ('share/ament_index/resource_index/packages',
