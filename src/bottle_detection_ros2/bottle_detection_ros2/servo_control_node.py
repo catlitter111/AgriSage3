@@ -263,8 +263,8 @@ class ServoControlNode(Node):
         
         # 执行舵机跟踪
         self.track_object(
-            int(msg.z),  # frame_width
-            int(msg.z),  # frame_height (假设正方形图像)
+            int(640),  # frame_width
+            int(480),  # frame_height
             int(msg.x),  # object_cx
             int(msg.y)   # object_cy
         )

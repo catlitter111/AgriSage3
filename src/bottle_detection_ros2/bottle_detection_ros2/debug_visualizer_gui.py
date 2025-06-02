@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-ROS2瓶子检测系统调试可视化程序
-实时显示各个模块的订阅信息
+ROS2瓶子检测系统调试可视化程序 - 修复版
+修复画面闪烁，增加舵机和电机命令显示
 """
 
 import rclpy
@@ -54,7 +54,9 @@ class DebugVisualizerNode(Node):
             'cpu_usage': 0.0,
             'servo_positions': [],
             'harvest_state': 0,
-            'last_update': {}
+            'last_update': {},
+            'motor_commands': [],  # 存储最近的电机命令
+            'servo_commands': [],  # 存储最近的舵机命令
         }
         
         # 历史数据（用于绘图）
@@ -62,6 +64,9 @@ class DebugVisualizerNode(Node):
         self.distance_history = deque(maxlen=self.history_length)
         self.fps_history = deque(maxlen=self.history_length)
         self.detection_history = deque(maxlen=self.history_length)
+        
+        # 命令历史
+        self.command_history = deque(maxlen=20)
         
         # 创建订阅者
         self._create_subscribers()
@@ -140,11 +145,25 @@ class DebugVisualizerNode(Node):
             10
         )
         
-        # 舵机状态订阅
+        # 舵机相关订阅
         self.servo_status_sub = self.create_subscription(
             ServoStatus,
             'servo/status',
             self.servo_status_callback,
+            10
+        )
+        
+        self.servo_command_sub = self.create_subscription(
+            ServoCommand,
+            'servo/command',
+            self.servo_command_callback,
+            10
+        )
+        
+        self.tracking_target_sub = self.create_subscription(
+            Point,
+            'servo/tracking_target',
+            self.tracking_target_callback,
             10
         )
         
@@ -153,6 +172,13 @@ class DebugVisualizerNode(Node):
             String,
             'harvest/status',
             self.harvest_status_callback,
+            10
+        )
+        
+        self.harvest_command_sub = self.create_subscription(
+            HarvestCommand,
+            'robot/harvest_command',
+            self.harvest_command_callback,
             10
         )
     
@@ -265,6 +291,12 @@ class DebugVisualizerNode(Node):
             'angular_z': msg.angular.z
         }
         self.data['last_update']['cmd_vel'] = time.time()
+        
+        # 解析为运动命令
+        motion_cmd = self._parse_motion_command(msg)
+        if motion_cmd:
+            self.command_history.append(f"[电机] {motion_cmd}")
+            self.gui.add_command(f"电机: {motion_cmd}")
     
     def robot_command_callback(self, msg):
         """机器人命令回调"""
@@ -274,6 +306,32 @@ class DebugVisualizerNode(Node):
             'emergency_stop': msg.emergency_stop
         }
         self.data['last_update']['robot_command'] = time.time()
+        
+        # 添加到命令历史
+        cmd_text = f"[机器人] {msg.command} 速度:{msg.speed:.1f}"
+        if msg.emergency_stop:
+            cmd_text += " [紧急停止]"
+        self.command_history.append(cmd_text)
+        self.gui.add_command(cmd_text)
+    
+    def servo_command_callback(self, msg):
+        """舵机命令回调"""
+        cmd_text = f"[舵机{msg.servo_id}] "
+        if msg.stop:
+            cmd_text += "停止"
+        else:
+            cmd_text += f"位置:{msg.position} 时间:{msg.time_ms}ms"
+        
+        self.command_history.append(cmd_text)
+        self.gui.add_command(f"舵机: ID={msg.servo_id} POS={msg.position}")
+        self.data['last_update']['servo_command'] = time.time()
+    
+    def tracking_target_callback(self, msg):
+        """舵机跟踪目标回调"""
+        cmd_text = f"[跟踪] 目标:({int(msg.x)}, {int(msg.y)})"
+        self.command_history.append(cmd_text)
+        self.gui.add_command(f"跟踪: X={int(msg.x)} Y={int(msg.y)}")
+        self.data['last_update']['tracking'] = time.time()
     
     def servo_status_callback(self, msg):
         """舵机状态回调"""
@@ -281,6 +339,19 @@ class DebugVisualizerNode(Node):
         self.data['harvest_state'] = msg.harvest_state
         self.data['tracking_active'] = msg.tracking_active
         self.data['last_update']['servo'] = time.time()
+    
+    def harvest_command_callback(self, msg):
+        """采摘命令回调"""
+        if msg.start_harvest:
+            cmd_text = "[采摘] 开始采摘动作"
+        elif msg.stop_harvest:
+            cmd_text = "[采摘] 停止采摘"
+        else:
+            cmd_text = "[采摘] 未知命令"
+        
+        self.command_history.append(cmd_text)
+        self.gui.add_command(cmd_text)
+        self.data['last_update']['harvest_command'] = time.time()
     
     def harvest_status_callback(self, msg):
         """采摘状态回调"""
@@ -291,10 +362,30 @@ class DebugVisualizerNode(Node):
         except:
             pass
     
+    def _parse_motion_command(self, twist_msg):
+        """解析Twist消息为运动命令"""
+        linear_x = twist_msg.linear.x
+        angular_z = twist_msg.angular.z
+        
+        # 判断运动类型
+        if abs(linear_x) < 0.01 and abs(angular_z) < 0.01:
+            return "停止"
+        elif abs(linear_x) > abs(angular_z):
+            if linear_x > 0:
+                return f"前进 {linear_x:.2f}m/s"
+            else:
+                return f"后退 {abs(linear_x):.2f}m/s"
+        else:
+            if angular_z > 0:
+                return f"左转 {angular_z:.2f}rad/s"
+            else:
+                return f"右转 {abs(angular_z):.2f}rad/s"
+    
     def update_gui(self):
         """更新GUI显示"""
         self.gui.update_data(self.data, self.distance_history, 
-                           self.fps_history, self.detection_history)
+                           self.fps_history, self.detection_history,
+                           self.command_history)
 
 
 class DebugVisualizerGUI:
@@ -326,17 +417,24 @@ class DebugVisualizerGUI:
         self._create_bottom_panel()
         
         # 数据显示变量
-        self.image_label = None
+        self.image_photo = None  # 保持图像引用
         self.last_image_update = 0
+        
+        # 命令列表
+        self.command_list = deque(maxlen=15)
         
     def _create_left_panel(self):
         """创建左侧面板 - 图像和检测信息"""
         left_frame = ttk.LabelFrame(self.main_frame, text="视觉检测", padding="5")
         left_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
         
-        # 图像显示
-        self.image_canvas = tk.Canvas(left_frame, width=640, height=480, bg='black')
-        self.image_canvas.grid(row=0, column=0, padx=5, pady=5)
+        # 图像显示 - 使用Label而不是Canvas以减少闪烁
+        self.image_label = ttk.Label(left_frame)
+        self.image_label.grid(row=0, column=0, padx=5, pady=5)
+        
+        # 创建黑色背景的初始图像
+        initial_image = np.zeros((480, 640, 3), dtype=np.uint8)
+        self.update_image(initial_image)
         
         # 检测信息
         info_frame = ttk.LabelFrame(left_frame, text="检测信息", padding="5")
@@ -383,18 +481,26 @@ class DebugVisualizerGUI:
             self.robot_labels[key] = ttk.Label(robot_frame, text="--")
             self.robot_labels[key].grid(row=i, column=1, sticky=tk.W, padx=5)
         
-        # 控制命令
-        cmd_frame = ttk.LabelFrame(right_frame, text="控制命令", padding="5")
+        # 控制命令历史 - 改进版
+        cmd_frame = ttk.LabelFrame(right_frame, text="控制命令历史", padding="5")
         cmd_frame.grid(row=1, column=0, sticky=(tk.W, tk.E, tk.N), padx=5, pady=5)
         
-        self.cmd_text = scrolledtext.ScrolledText(cmd_frame, height=8, width=40)
-        self.cmd_text.grid(row=0, column=0, padx=5, pady=5)
+        # 使用Listbox显示命令历史
+        scrollbar = ttk.Scrollbar(cmd_frame)
+        scrollbar.grid(row=0, column=1, sticky=(tk.N, tk.S))
+        
+        self.cmd_listbox = tk.Listbox(cmd_frame, height=10, width=50, 
+                                     yscrollcommand=scrollbar.set,
+                                     font=('Courier', 9))
+        self.cmd_listbox.grid(row=0, column=0, padx=5, pady=5)
+        scrollbar.config(command=self.cmd_listbox.yview)
         
         # 系统日志
         log_frame = ttk.LabelFrame(right_frame, text="系统日志", padding="5")
         log_frame.grid(row=2, column=0, sticky=(tk.W, tk.E, tk.N, tk.S), padx=5, pady=5)
         
-        self.log_text = scrolledtext.ScrolledText(log_frame, height=15, width=40)
+        self.log_text = scrolledtext.ScrolledText(log_frame, height=12, width=50,
+                                                  font=('Courier', 9))
         self.log_text.grid(row=0, column=0, padx=5, pady=5)
     
     def _create_bottom_panel(self):
@@ -407,22 +513,35 @@ class DebugVisualizerGUI:
         self.chart_canvas.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
     
     def update_image(self, cv_image):
-        """更新图像显示"""
+        """更新图像显示 - 防闪烁版本"""
         try:
             # 转换为PIL图像
             image = Image.fromarray(cv_image)
-            photo = ImageTk.PhotoImage(image=image)
+            self.image_photo = ImageTk.PhotoImage(image=image)
             
-            # 更新画布
-            self.image_canvas.delete("all")
-            self.image_canvas.create_image(320, 240, image=photo, anchor=tk.CENTER)
-            self.image_canvas.image = photo  # 保持引用
+            # 更新Label的图像
+            self.image_label.configure(image=self.image_photo)
             
             self.last_image_update = time.time()
         except Exception as e:
             print(f"更新图像失败: {e}")
     
-    def update_data(self, data, distance_history, fps_history, detection_history):
+    def add_command(self, command):
+        """添加命令到历史记录"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        cmd_entry = f"[{timestamp}] {command}"
+        
+        # 添加到列表框
+        self.cmd_listbox.insert(tk.END, cmd_entry)
+        
+        # 自动滚动到底部
+        self.cmd_listbox.yview(tk.END)
+        
+        # 限制历史长度
+        if self.cmd_listbox.size() > 100:
+            self.cmd_listbox.delete(0)
+    
+    def update_data(self, data, distance_history, fps_history, detection_history, command_history):
         """更新所有数据显示"""
         # 更新检测信息
         self.labels['fps'].config(text=f"{data.get('fps', 0):.1f}")
@@ -460,14 +579,6 @@ class DebugVisualizerGUI:
         pos = data.get('position', {})
         self.robot_labels['position_xy'].config(text=f"({pos.get('x', 0):.2f}, {pos.get('y', 0):.2f})")
         self.robot_labels['position_gps'].config(text=f"({pos.get('lat', 0):.6f}, {pos.get('lon', 0):.6f})")
-        
-        # 更新控制命令
-        if 'cmd_vel' in data:
-            cmd = data['cmd_vel']
-            cmd_text = f"线速度: ({cmd['linear_x']:.2f}, {cmd['linear_y']:.2f}, {cmd['linear_z']:.2f})\n"
-            cmd_text += f"角速度: ({cmd['angular_x']:.2f}, {cmd['angular_y']:.2f}, {cmd['angular_z']:.2f})"
-            self.cmd_text.delete(1.0, tk.END)
-            self.cmd_text.insert(tk.END, cmd_text)
         
         # 更新系统日志
         current_time = time.time()
