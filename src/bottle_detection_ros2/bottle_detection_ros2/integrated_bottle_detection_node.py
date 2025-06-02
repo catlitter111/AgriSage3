@@ -450,7 +450,7 @@ class IntegratedBottleDetectionNode(Node):
     
     @trace_errors
     def _process_detection_result(self, frame_left, frame_right, bottle_detections, timestamp):
-        """处理检测结果并发布"""
+        """处理检测结果并发布 - 修复版"""
         logger.info(f"处理检测结果: 检测数量={len(bottle_detections) if bottle_detections else 0}")
         
         try:
@@ -482,9 +482,9 @@ class IntegratedBottleDetectionNode(Node):
                     if hasattr(detection, '__iter__'):
                         for i, item in enumerate(detection):
                             logger.debug(f"    [{i}]: type={type(item).__name__}, "
-                                       f"value={item}, "
-                                       f"is_array={isinstance(item, np.ndarray)}, "
-                                       f"shape={getattr(item, 'shape', 'N/A')}")
+                                    f"value={item}, "
+                                    f"is_array={isinstance(item, np.ndarray)}, "
+                                    f"shape={getattr(item, 'shape', 'N/A')}")
                     
                     # 解包检测结果
                     if len(detection) < 7:
@@ -534,11 +534,24 @@ class IntegratedBottleDetectionNode(Node):
                             filtered_distance = self.distance_filter.update(distance)
                             logger.debug(f"  滤波后距离: {filtered_distance}")
                             
+                            # 获取3D位置 - 确保正确提取
+                            position_3d = None
+                            if threeD is not None:
+                                try:
+                                    # 确保坐标在范围内
+                                    h, w = threeD.shape[:2]
+                                    if 0 <= cy < h and 0 <= cx < w:
+                                        position_3d = threeD[cy][cx].copy()  # 使用copy避免引用问题
+                                        logger.debug(f"  3D位置: type={type(position_3d)}, shape={position_3d.shape}, value={position_3d}")
+                                except Exception as e:
+                                    logger.error(f"  获取3D位置失败: {e}")
+                                    position_3d = None
+                            
                             valid_detections.append({
                                 'detection': (int(left), int(top), int(right), int(bottom), 
                                             float(score), int(cx), int(cy)),
                                 'distance': float(filtered_distance),
-                                '3d_position': threeD[cy][cx] if threeD is not None else None
+                                '3d_position': position_3d  # 可能是None或numpy数组
                             })
                             
                             if filtered_distance < min_distance:
@@ -696,6 +709,12 @@ class IntegratedBottleDetectionNode(Node):
                 position_3d = nearest_bottle['3d_position']
                 left, top, right, bottom, score, cx, cy = detection
                 
+                # 添加调试日志
+                logger.debug(f"发布检测结果 - position_3d类型: {type(position_3d)}")
+                if position_3d is not None:
+                    logger.debug(f"  position_3d shape: {getattr(position_3d, 'shape', 'N/A')}")
+                    logger.debug(f"  position_3d value: {position_3d}")
+                
                 # 发布距离
                 distance_msg = Float32()
                 distance_msg.data = distance
@@ -703,13 +722,26 @@ class IntegratedBottleDetectionNode(Node):
                 
                 # 发布3D位置
                 if position_3d is not None:
-                    position_msg = PointStamped()
-                    position_msg.header.stamp = timestamp
-                    position_msg.header.frame_id = 'left_camera'
-                    position_msg.point.x = float(position_3d[0] / 1000.0)
-                    position_msg.point.y = float(position_3d[1] / 1000.0)
-                    position_msg.point.z = float(position_3d[2] / 1000.0)
-                    self.bottle_position_pub.publish(position_msg)
+                    try:
+                        position_msg = PointStamped()
+                        position_msg.header.stamp = timestamp
+                        position_msg.header.frame_id = 'left_camera'
+                        
+                        # 安全地提取坐标值
+                        if isinstance(position_3d, np.ndarray) and position_3d.size >= 3:
+                            position_msg.point.x = float(position_3d[0]) / 1000.0
+                            position_msg.point.y = float(position_3d[1]) / 1000.0
+                            position_msg.point.z = float(position_3d[2]) / 1000.0
+                        else:
+                            logger.warning(f"position_3d格式不正确: {position_3d}")
+                            position_msg.point.x = 0.0
+                            position_msg.point.y = 0.0
+                            position_msg.point.z = 0.0
+                        
+                        self.bottle_position_pub.publish(position_msg)
+                    except Exception as e:
+                        logger.error(f"处理3D位置时出错: {e}")
+                        logger.error(f"position_3d详情: type={type(position_3d)}, value={position_3d}")
                 
                 # 发布详细信息
                 info = {
@@ -741,9 +773,28 @@ class IntegratedBottleDetectionNode(Node):
                 detection_msg.bbox_bottom = int(bottom)
                 detection_msg.confidence = float(score)
                 detection_msg.distance = float(distance)
-                detection_msg.position_x = float(position_3d[0] / 1000.0) if position_3d else 0.0
-                detection_msg.position_y = float(position_3d[1] / 1000.0) if position_3d else 0.0
-                detection_msg.position_z = float(position_3d[2] / 1000.0) if position_3d else 0.0
+                
+                # 修复：正确处理 position_3d
+                if position_3d is not None:
+                    try:
+                        if isinstance(position_3d, np.ndarray) and position_3d.size >= 3:
+                            detection_msg.position_x = float(position_3d[0]) / 1000.0
+                            detection_msg.position_y = float(position_3d[1]) / 1000.0
+                            detection_msg.position_z = float(position_3d[2]) / 1000.0
+                        else:
+                            detection_msg.position_x = 0.0
+                            detection_msg.position_y = 0.0
+                            detection_msg.position_z = 0.0
+                    except Exception as e:
+                        logger.error(f"转换position_3d失败: {e}")
+                        detection_msg.position_x = 0.0
+                        detection_msg.position_y = 0.0
+                        detection_msg.position_z = 0.0
+                else:
+                    detection_msg.position_x = 0.0
+                    detection_msg.position_y = 0.0
+                    detection_msg.position_z = 0.0
+                
                 detection_msg.image_width = self.camera_width // 2
                 detection_msg.image_height = self.camera_height
                 detection_msg.status = self._get_distance_status(distance)
@@ -779,6 +830,7 @@ class IntegratedBottleDetectionNode(Node):
         except Exception as e:
             logger.error(f"发布检测结果失败: {e}")
             logger.error(traceback.format_exc())
+
     
     @trace_errors
     def _publish_tracking_target(self, nearest_bottle):
