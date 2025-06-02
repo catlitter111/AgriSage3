@@ -450,7 +450,7 @@ class IntegratedBottleDetectionNode(Node):
     
     @trace_errors
     def _process_detection_result(self, frame_left, frame_right, bottle_detections, timestamp):
-        """处理检测结果并发布 - 修复版"""
+        """处理检测结果并发布 - 修改版：显示所有检测到的瓶子"""
         logger.info(f"处理检测结果: 检测数量={len(bottle_detections) if bottle_detections else 0}")
         
         try:
@@ -468,23 +468,14 @@ class IntegratedBottleDetectionNode(Node):
             nearest_bottle = None
             min_distance = float('inf')
             
-            # 计算每个瓶子的距离
-            valid_detections = []
+            # 存储所有检测结果（包括距离无效的）
+            all_detections = []
+            valid_detections = []  # 仅存储距离有效的检测
             
             for idx, detection in enumerate(bottle_detections):
                 try:
                     logger.debug(f"\n处理检测 {idx}:")
                     logger.debug(f"  原始数据: {detection}")
-                    logger.debug(f"  数据类型: {type(detection)}")
-                    logger.debug(f"  数据长度: {len(detection) if hasattr(detection, '__len__') else 'N/A'}")
-                    
-                    # 打印每个元素的详细信息
-                    if hasattr(detection, '__iter__'):
-                        for i, item in enumerate(detection):
-                            logger.debug(f"    [{i}]: type={type(item).__name__}, "
-                                    f"value={item}, "
-                                    f"is_array={isinstance(item, np.ndarray)}, "
-                                    f"shape={getattr(item, 'shape', 'N/A')}")
                     
                     # 解包检测结果
                     if len(detection) < 7:
@@ -492,12 +483,6 @@ class IntegratedBottleDetectionNode(Node):
                         continue
                     
                     left, top, right, bottom, score, cx, cy = detection[:7]
-                    
-                    # 记录原始类型
-                    logger.debug(f"  解包后原始类型:")
-                    logger.debug(f"    score: {type(score)} = {score}")
-                    logger.debug(f"    cx: {type(cx)} = {cx}")
-                    logger.debug(f"    cy: {type(cy)} = {cy}")
                     
                     # 安全转换为标量
                     score = self._safe_to_scalar(score, "score")
@@ -508,86 +493,96 @@ class IntegratedBottleDetectionNode(Node):
                     right = self._safe_to_scalar(right, "right", as_int=True)
                     bottom = self._safe_to_scalar(bottom, "bottom", as_int=True)
                     
-                    logger.debug(f"  转换后的值:")
-                    logger.debug(f"    score: {type(score)} = {score}")
-                    logger.debug(f"    cx: {type(cx)} = {cx}")
-                    logger.debug(f"    cy: {type(cy)} = {cy}")
-                    
-                    # 比较置信度
-                    logger.debug(f"  置信度比较: {score} < {self.confidence_threshold} ?")
+                    # 检查置信度
                     if score < self.confidence_threshold:
-                        logger.debug(f"  跳过低置信度检测")
+                        logger.debug(f"  跳过低置信度检测: {score} < {self.confidence_threshold}")
                         continue
                     
                     # 计算距离
                     distance = self.stereo_camera.get_bottle_distance(threeD, cx, cy)
                     logger.debug(f"  原始距离: type={type(distance)}, value={distance}")
                     
+                    # 获取3D位置
+                    position_3d = None
+                    if threeD is not None:
+                        try:
+                            h, w = threeD.shape[:2]
+                            if 0 <= cy < h and 0 <= cx < w:
+                                position_3d = threeD[cy][cx].copy()
+                        except Exception as e:
+                            logger.error(f"  获取3D位置失败: {e}")
+                    
+                    # 创建检测字典
+                    detection_dict = {
+                        'detection': (int(left), int(top), int(right), int(bottom), 
+                                    float(score), int(cx), int(cy)),
+                        'distance': None,  # 初始为None
+                        'distance_raw': distance,  # 保存原始距离值
+                        '3d_position': position_3d,
+                        'valid_distance': False,  # 标记距离是否有效
+                        'status': 'unknown'  # 状态描述
+                    }
+                    
+                    # 处理距离
                     if distance is not None:
                         distance = self._safe_to_scalar(distance, "distance")
-                        logger.debug(f"  转换后距离: {distance}")
+                        detection_dict['distance_raw'] = distance
                         
-                        # 距离范围检查
-                        logger.debug(f"  距离范围检查: {self.min_distance} <= {distance} <= {self.max_distance}")
+                        # 检查距离范围
                         if self.min_distance <= distance <= self.max_distance:
-                            # 应用距离滤波
+                            # 距离有效
                             filtered_distance = self.distance_filter.update(distance)
-                            logger.debug(f"  滤波后距离: {filtered_distance}")
+                            detection_dict['distance'] = float(filtered_distance)
+                            detection_dict['valid_distance'] = True
+                            detection_dict['status'] = 'valid'
                             
-                            # 获取3D位置 - 确保正确提取
-                            position_3d = None
-                            if threeD is not None:
-                                try:
-                                    # 确保坐标在范围内
-                                    h, w = threeD.shape[:2]
-                                    if 0 <= cy < h and 0 <= cx < w:
-                                        position_3d = threeD[cy][cx].copy()  # 使用copy避免引用问题
-                                        logger.debug(f"  3D位置: type={type(position_3d)}, shape={position_3d.shape}, value={position_3d}")
-                                except Exception as e:
-                                    logger.error(f"  获取3D位置失败: {e}")
-                                    position_3d = None
+                            # 添加到有效检测列表
+                            valid_detections.append(detection_dict)
                             
-                            valid_detections.append({
-                                'detection': (int(left), int(top), int(right), int(bottom), 
-                                            float(score), int(cx), int(cy)),
-                                'distance': float(filtered_distance),
-                                '3d_position': position_3d  # 可能是None或numpy数组
-                            })
-                            
+                            # 更新最近瓶子
                             if filtered_distance < min_distance:
                                 min_distance = filtered_distance
-                                nearest_bottle = valid_detections[-1]
+                                nearest_bottle = detection_dict
                         else:
-                            logger.debug(f"  距离超出范围，跳过")
+                            # 距离超出范围但有值
+                            detection_dict['distance'] = float(distance)
+                            detection_dict['valid_distance'] = False
+                            if distance < self.min_distance:
+                                detection_dict['status'] = 'too_close'
+                            else:
+                                detection_dict['status'] = 'too_far'
                     else:
-                        logger.debug(f"  无效距离，跳过")
-                        
+                        # 距离无效（无法计算）
+                        detection_dict['valid_distance'] = False
+                        detection_dict['status'] = 'no_distance'
+                    
+                    # 添加到所有检测列表（无论距离是否有效）
+                    all_detections.append(detection_dict)
+                    logger.debug(f"  检测状态: {detection_dict['status']}, 距离: {detection_dict['distance']}")
+                    
                 except Exception as e:
-                    logger.error(f"处理检测 {idx} 时出错:")
-                    logger.error(f"  检测数据: {detection}")
-                    logger.error(f"  错误类型: {type(e).__name__}")
-                    logger.error(f"  错误信息: {str(e)}")
+                    logger.error(f"处理检测 {idx} 时出错: {e}")
                     logger.error(traceback.format_exc())
                     continue
             
-            logger.info(f"有效检测数: {len(valid_detections)}")
+            logger.info(f"总检测数: {len(all_detections)}, 有效检测数: {len(valid_detections)}")
             
-            # 更新全局状态
+            # 更新全局状态（仅包含距离有效的）
             self.bottle_detections_with_distance = valid_detections
             self.nearest_bottle_distance = min_distance if nearest_bottle else None
             
-            # 在图像上绘制检测结果
-            self._draw_detections_on_image(annotated_image, valid_detections)
+            # 在图像上绘制所有检测结果（包括距离无效的）
+            self._draw_all_detections_on_image(annotated_image, all_detections)
             
             # 添加状态信息
-            self._draw_status_info(annotated_image)
+            self._draw_status_info_enhanced(annotated_image, len(all_detections), len(valid_detections))
             
             # 发布结果
             self._publish_raw_images(frame_left, frame_right, timestamp)
             self._publish_annotated_image(annotated_image, timestamp)
             self._publish_detection_results(nearest_bottle, len(valid_detections), timestamp)
             
-            # 手动模式下的舵机跟踪
+            # 手动模式下的舵机跟踪（仅跟踪有效距离的瓶子）
             if self.current_mode == "manual" and self.enable_servo_tracking and nearest_bottle:
                 self._publish_tracking_target(nearest_bottle)
             
@@ -601,6 +596,108 @@ class IntegratedBottleDetectionNode(Node):
             logger.error(f"错误信息: {str(e)}")
             logger.error(traceback.format_exc())
             raise
+
+    @trace_errors
+    def _draw_all_detections_on_image(self, image, all_detections):
+        """在图像上绘制所有检测结果，使用不同颜色区分状态"""
+        # 定义不同状态的颜色
+        colors = {
+            'valid': (0, 255, 0),       # 绿色 - 有效距离
+            'too_close': (0, 165, 255),  # 橙色 - 太近
+            'too_far': (255, 0, 0),      # 蓝色 - 太远  
+            'no_distance': (128, 128, 128),  # 灰色 - 无距离数据
+            'unknown': (255, 255, 255)   # 白色 - 未知状态
+        }
+        
+        for det in all_detections:
+            detection = det['detection']
+            distance = det['distance']
+            status = det['status']
+            valid = det['valid_distance']
+            left, top, right, bottom, score, cx, cy = detection
+            
+            # 选择颜色
+            color = colors.get(status, colors['unknown'])
+            thickness = 3 if valid else 2  # 有效距离的框更粗
+            
+            # 绘制边界框
+            cv2.rectangle(image, (int(left), int(top)), (int(right), int(bottom)), color, thickness)
+            
+            # 绘制标签
+            label = f"bottle: {score:.2f}"
+            cv2.putText(image, label, (int(left), int(top-10)), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+            
+            # 绘制距离或状态
+            if distance is not None:
+                distance_text = f"{distance:.2f}m"
+            else:
+                # 根据状态显示不同的文本
+                status_text = {
+                    'no_distance': "NO DIST",
+                    'too_close': "TOO CLOSE",
+                    'too_far': "TOO FAR",
+                    'unknown': "UNKNOWN"
+                }
+                distance_text = status_text.get(status, "N/A")
+            
+            # 添加状态标记
+            if not valid:
+                distance_text = f"[{distance_text}]"  # 用方括号标记无效距离
+            
+            cv2.putText(image, distance_text, (int(cx-30), int(cy)), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+            
+            # 绘制中心点
+            cv2.circle(image, (int(cx), int(cy)), 5, color, -1)
+            
+            # 如果是最近的有效瓶子，添加特殊标记
+            if valid and det.get('is_nearest', False):
+                # 绘制一个更大的圆圈
+                cv2.circle(image, (int(cx), int(cy)), 20, (0, 255, 255), 2)  # 黄色圆圈
+
+    @trace_errors  
+    def _draw_status_info_enhanced(self, image, total_detections, valid_detections):
+        """在图像上绘制增强的状态信息"""
+        # FPS
+        cv2.putText(image, f"FPS: {self.current_fps:.1f}", (10, 30), 
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        
+        # 模式
+        mode_text = f"Mode: {self.current_mode.upper()}"
+        if self.current_mode == "auto" and self.auto_harvest_active:
+            mode_text += " (HARVEST)"
+        cv2.putText(image, mode_text, (10, 60), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        
+        # 队列大小
+        queue_text = f"Queue: {self.bottle_detector_pool.get_queue_size()}"
+        cv2.putText(image, queue_text, (10, 90), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 0), 2)
+        
+        # 检测统计
+        detection_text = f"Detections: {total_detections} total, {valid_detections} valid"
+        cv2.putText(image, detection_text, (10, 120), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        
+        # 图例
+        legend_y = image.shape[0] - 100
+        cv2.putText(image, "Legend:", (10, legend_y), 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        # 各种状态的颜色说明
+        legends = [
+            ("Valid", (0, 255, 0)),
+            ("Too Close", (0, 165, 255)),
+            ("Too Far", (255, 0, 0)),
+            ("No Distance", (128, 128, 128))
+        ]
+        
+        for i, (text, color) in enumerate(legends):
+            y_pos = legend_y + 20 + i * 20
+            cv2.rectangle(image, (10, y_pos-10), (25, y_pos), color, -1)
+            cv2.putText(image, text, (30, y_pos), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, color, 1)
     
     @trace_errors
     def _draw_detections_on_image(self, image, valid_detections):
