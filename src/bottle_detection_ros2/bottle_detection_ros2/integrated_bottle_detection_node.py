@@ -451,7 +451,7 @@ class IntegratedBottleDetectionNode(Node):
     @trace_errors
     def _process_detection_result(self, frame_left, frame_right, bottle_detections, timestamp):
         """处理检测结果并发布 - 修改版：显示所有检测到的瓶子"""
-        logger.info(f"处理检测结果: 检测数量={len(bottle_detections) if bottle_detections else 0}")
+        logger.debug(f"处理检测结果: 检测数量={len(bottle_detections) if bottle_detections else 0}")
         
         try:
             # 校正图像
