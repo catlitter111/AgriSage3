@@ -46,6 +46,7 @@ setup(
             'robot_control_node = bottle_detection_ros2.robot_control_node:main',
             'servo_control_node = bottle_detection_ros2.servo_control_node:main',
             'auto_harvest_controller = bottle_detection_ros2.auto_harvest_controller:main',
+            'debug_visualizer_gui = bottle_detection_ros2.debug_visualizer_gui:main',
         ],
     },
 )
