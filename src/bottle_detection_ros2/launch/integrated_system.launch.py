@@ -25,14 +25,14 @@ def generate_launch_description():
     # 相机参数
     camera_id_arg = DeclareLaunchArgument(
         'camera_id',
-        default_value='21',
+        default_value='1',
         description='双目相机设备ID'
     )
     
     # 模型参数
     model_path_arg = DeclareLaunchArgument(
         'model_path',
-        default_value=os.path.join(pkg_dir, 'models', 'yolo11n.rknn'),
+        default_value="/home/monster/download/AgriSage3/src/bottle_detection_ros2/data/yolo11n.rknn",
         description='RKNN模型文件路径'
     )
     
