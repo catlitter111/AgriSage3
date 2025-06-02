@@ -565,7 +565,7 @@ class IntegratedBottleDetectionNode(Node):
                     logger.error(traceback.format_exc())
                     continue
             
-            logger.info(f"总检测数: {len(all_detections)}, 有效检测数: {len(valid_detections)}")
+            logger.debug(f"总检测数: {len(all_detections)}, 有效检测数: {len(valid_detections)}")
             
             # 更新全局状态（仅包含距离有效的）
             self.bottle_detections_with_distance = valid_detections
