@@ -20,13 +20,13 @@ def generate_launch_description():
     # 声明启动参数
     camera_id_arg = DeclareLaunchArgument(
         'camera_id',
-        default_value='1',
+        default_value='21',
         description='双目相机设备ID'
     )
     
     model_path_arg = DeclareLaunchArgument(
         'model_path',
-        default_value='/home/monster/download/AgriSage3/src/bottle_detection_ros2/data/yolo11n.rknn',
+        default_value='/home/elf/Desktop/robot_ROS2/src/bottle_detection_ros2/data/yolo11n.rknn',
         description='RKNN模型文件路径'
     )
     
@@ -44,7 +44,7 @@ def generate_launch_description():
     
     calibration_file_arg = DeclareLaunchArgument(
         'calibration_file',
-        default_value='/home/monster/download/AgriSage3/src/bottle_detection_ros2/data/out.xls',
+        default_value='/home/elf/Desktop/robot_ROS2/src/bottle_detection_ros2/data/out.xls',
         description='相机标定文件路径（留空使用默认参数）'
     )
     

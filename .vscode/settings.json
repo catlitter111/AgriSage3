@@ -41,5 +41,5 @@
         "/opt/ros/humble/lib/python3.10/site-packages",
         "/opt/ros/humble/local/lib/python3.10/dist-packages"
     ],
-    "cmake.sourceDirectory": "/home/monster/download/AgriSage3/src/bottle_detection_ros2"
+    "cmake.sourceDirectory": "/home/elf/Desktop/robot_ROS2/src/bottle_detection_msgs"
 }
