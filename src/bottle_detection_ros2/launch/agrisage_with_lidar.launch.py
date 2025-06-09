@@ -95,8 +95,8 @@ def generate_launch_description():
         name='integrated_bottle_detection_node',
         output='screen',
         parameters=[
-            {'camera_id': 1},
-            {'model_path': '/home/yahboom/AgriSage/models/bottle_detection.rknn'},
+            {'camera_id': 21},
+            {'model_path': '/home/elf/Desktop/robot_ROS2/src/bottle_detection_ros2/data/yolo11n.rknn'},
             {'thread_num': 2},
             {'queue_size': 3},
             {'publish_rate': 15.0},
@@ -146,7 +146,7 @@ def generate_launch_description():
         name='robot_control_node',
         output='screen',
         parameters=[
-            {'serial_port': '/dev/ttyS8'},
+            {'serial_port': '/dev/ttyS3'},
             {'baudrate': 115200},
             {'use_sim_time': LaunchConfiguration('use_sim_time')}
         ]
