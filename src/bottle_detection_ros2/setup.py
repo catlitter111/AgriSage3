@@ -39,15 +39,26 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'bottle_detection_node = bottle_detection_ros2.bottle_detection_node:main',
-            'bottle_detection_node_async = bottle_detection_ros2.bottle_detection_node_async:main',
-            'integrated_bottle_detection_node = bottle_detection_ros2.integrated_bottle_detection_node:main',
-            'websocket_bridge_node = bottle_detection_ros2.websocket_bridge_node:main',
-            'robot_control_node = bottle_detection_ros2.robot_control_node:main',
-            'servo_control_node = bottle_detection_ros2.servo_control_node:main',
-            'auto_harvest_controller = bottle_detection_ros2.auto_harvest_controller:main',
-            'debug_visualizer_gui = bottle_detection_ros2.debug_visualizer_gui:main',
-            'laser_obstacle_avoidance = bottle_detection_ros2.laser_obstacle_avoidance:main',
+            # 检测节点
+            'bottle_detection_node = bottle_detection_ros2.nodes.detection.bottle_detection_node:main',
+            'bottle_detection_node_async = bottle_detection_ros2.nodes.detection.bottle_detection_node_async:main',
+            'integrated_bottle_detection_node = bottle_detection_ros2.nodes.detection.integrated_bottle_detection_node:main',
+            
+            # 控制节点
+            'robot_control_node = bottle_detection_ros2.nodes.control.robot_control_node:main',
+            'servo_control_node = bottle_detection_ros2.nodes.control.servo_control_node:main',
+            'auto_harvest_controller = bottle_detection_ros2.nodes.control.auto_harvest_controller:main',
+            
+            # 通信节点
+            'websocket_bridge_node = bottle_detection_ros2.nodes.communication.websocket_bridge_node:main',
+            
+            # 硬件节点
+            'laser_obstacle_avoidance = bottle_detection_ros2.core.hardware.laser_obstacle_avoidance:main',
+            
+            # GUI和调试工具
+            'debug_visualizer_gui = bottle_detection_ros2.gui.debug_visualizer_gui:main',
+            
+            # 测试脚本（如果存在main函数）
             'test_lidar_integration = bottle_detection_ros2.test_lidar_integration:main',
         ],
     },

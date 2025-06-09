@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-异步瓶子检测ROS2主节点
-使用多线程异步处理提高检测帧率
+异步瓶子检测节点
+使用异步处理提高检测性能
 """
 
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image, CompressedImage
-from geometry_msgs.msg import PointStamped
+from geometry_msgs.msg import PointStamped, Point
 from std_msgs.msg import String, Float32, Int32, Header
+from bottle_detection_msgs.msg import BottleDetection, ServoCommand
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import threading
 import time
 import json
-from queue import Queue
-from .stereo_camera import StereoCamera
-from .bottle_rknn_pool import BottleRKNNPoolExecutor
-from .bottle_detector_async import detect_bottle_async, draw_detections
+from queue import Queue, Empty
+from bottle_detection_ros2.core.vision.stereo_camera import StereoCamera
+from bottle_detection_ros2.core.processing.bottle_rknn_pool import BottleRKNNPoolExecutor
+from bottle_detection_ros2.core.vision.bottle_detector_async import detect_bottle_async, draw_detections
 
 class BottleDetectionNodeAsync(Node):
     """异步瓶子检测主节点类"""

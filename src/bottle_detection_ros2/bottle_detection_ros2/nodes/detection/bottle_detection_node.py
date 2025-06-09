@@ -11,14 +11,15 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Image, CompressedImage
 from geometry_msgs.msg import PointStamped
 from std_msgs.msg import String, Float32, Int32, Header
+from bottle_detection_msgs.msg import BottleDetection, ServoCommand
 from cv_bridge import CvBridge
 import cv2
 import numpy as np
 import threading
 import time
 import json
-from .stereo_camera import StereoCamera
-from .bottle_detector import BottleDetector
+from bottle_detection_ros2.core.vision.stereo_camera import StereoCamera
+from bottle_detection_ros2.core.vision.bottle_detector import BottleDetector
 
 class BottleDetectionNode(Node):
     """瓶子检测主节点类"""

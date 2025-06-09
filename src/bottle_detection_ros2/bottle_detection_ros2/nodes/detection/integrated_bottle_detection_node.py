@@ -25,10 +25,10 @@ import threading
 import time
 import json
 from queue import Queue, Empty
-from .stereo_camera import StereoCamera
-from .bottle_rknn_pool import BottleRKNNPoolExecutor
-from .bottle_detector_async import detect_bottle_async, draw_detections
-from .utils import MedianFilter
+from bottle_detection_ros2.core.vision.stereo_camera import StereoCamera
+from bottle_detection_ros2.core.processing.bottle_rknn_pool import BottleRKNNPoolExecutor
+from bottle_detection_ros2.core.vision.bottle_detector_async import detect_bottle_async, draw_detections
+from bottle_detection_ros2.utils.utils import MedianFilter
 
 # 设置详细日志
 logging.basicConfig(

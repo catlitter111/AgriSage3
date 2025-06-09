@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-异步瓶子检测主程序
-使用多线程异步处理提高检测帧率
+异步瓶子检测器
+使用RKNN模型池进行高效的异步检测
 """
 
 import cv2
@@ -11,7 +11,8 @@ import logging
 import time
 import sys
 import os
-from .bottle_rknn_pool import BottleRKNNPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from bottle_detection_ros2.core.processing.bottle_rknn_pool import BottleRKNNPoolExecutor
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

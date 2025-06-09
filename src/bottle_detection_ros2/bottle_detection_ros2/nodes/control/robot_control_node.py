@@ -125,6 +125,18 @@ class RobotControlNode(Node):
         self.signal_strength = 75
         self.upload_bandwidth = 50.0
         
+        # 工作状态和模式
+        self.work_mode = "idle"  # 工作模式：idle, moving, harvesting
+        self.is_working = False  # 是否正在工作
+        
+        # 时间戳
+        self.start_time = time.time()
+        self.last_harvest_time = time.time()
+        
+        # 位置相关
+        self.last_position = None
+        self.position_noise = 0.0001  # 位置噪声（度）
+        
         # 创建定时器发布状态
         self.status_timer = self.create_timer(2.0, self.publish_status)
         self.simulation_timer = self.create_timer(5.0, self.update_simulation_data)
