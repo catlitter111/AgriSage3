@@ -524,7 +524,14 @@ class ServoControlNode(Node):
     def tracking_target_callback(self, msg):
         """跟踪目标回调"""
         if not self.enable_tracking:
+            self.get_logger().warn('舵机跟踪功能已禁用，跳过跟踪指令')
             return
+        
+        # 添加调试日志
+        self.get_logger().info(
+            f'收到跟踪目标: 坐标=({int(msg.x)}, {int(msg.y)}), '
+            f'图像宽度={int(msg.z)}'
+        )
         
         # 执行舵机跟踪
         self.track_object(

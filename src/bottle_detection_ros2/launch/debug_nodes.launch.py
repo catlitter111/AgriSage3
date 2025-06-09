@@ -109,7 +109,7 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration('launch_servo_control')),
         parameters=[{
             'serial_port': '/dev/null',  # 模拟串口
-            'enable_tracking': False,  # 调试时禁用跟踪
+            'enable_tracking': True,  # 启用跟踪功能
         }]
     )
     

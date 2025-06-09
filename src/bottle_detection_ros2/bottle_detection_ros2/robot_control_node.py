@@ -8,6 +8,7 @@
 
 import rclpy
 from rclpy.node import Node
+from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import Twist, PoseStamped
 from std_msgs.msg import String, Bool
 from bottle_detection_msgs.msg import RobotCommand, RobotStatus
@@ -15,6 +16,10 @@ from serial import Serial
 import threading
 import json
 import time
+import struct
+import random
+import math
+import datetime
 
 # 命令类型常量
 CMD_SET_DIRECTION = 0x01
@@ -59,11 +64,17 @@ class RobotControlNode(Node):
         self.connect_serial()
         
         # 创建订阅者
+        qos = QoSProfile(
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        
         self.cmd_vel_sub = self.create_subscription(
             Twist,
             'cmd_vel',
             self.cmd_vel_callback,
-            10
+            qos
         )
         
         self.robot_cmd_sub = self.create_subscription(
@@ -87,24 +98,52 @@ class RobotControlNode(Node):
             10
         )
         
-        # 状态变量 - 确保所有数值都是浮点数
+        # 状态变量 - 确保所有数值都是浮点数，并设置有意义的初值
         self.current_speed = 0.0  # 浮点数
         self.current_direction = float(DIR_STOP)  # 转换为浮点数
-        self.position = {'x': 0.0, 'y': 0.0, 'latitude': 0.0, 'longitude': 0.0}
-        self.battery_level = 85.0
+        
+        # 位置信息（默认在西安某苹果园）
+        self.position = {
+            'x': 0.0, 
+            'y': 0.0, 
+            'latitude': 34.938500 + random.uniform(-0.002, 0.002),  # 西安纬度 + 随机偏移
+            'longitude': 108.241500 + random.uniform(-0.002, 0.002)  # 西安经度 + 随机偏移
+        }
+        
+        # 设备状态
+        self.battery_level = random.uniform(65, 90)  # 随机电池电量
         self.cpu_usage = 0.0
+        
+        # 采摘统计 - 设置有意义的初值
         self.harvested_count = 0
-        self.today_harvested = 0
-        self.total_harvested = 0
-        self.working_hours = 0.0
-        self.working_area = 0.0
-        self.harvest_accuracy = 96.5
-        self.temperature = 25.0
-        self.signal_strength = 75
-        self.upload_bandwidth = 50.0
+        self.today_harvested = random.randint(80, 250)  # 今日已有一些采摘数据
+        self.total_harvested = random.randint(1500, 4000)  # 历史总采摘数
+        
+        # 工作统计 - 设置有意义的初值
+        self.working_hours = random.uniform(1.2, 4.5)  # 今日已工作一段时间
+        self.working_area = random.uniform(0.8, 3.2)  # 今日已作业一些面积
+        
+        # 设备性能
+        self.harvest_accuracy = random.uniform(92.5, 97.8)  # 采摘准确率
+        self.temperature = random.uniform(28, 35)  # 设备温度
+        self.signal_strength = random.randint(65, 88)  # 信号强度
+        self.upload_bandwidth = random.uniform(15, 45)  # 上传带宽
+        
+        # 统计数据初始化 - 添加数据模拟逻辑
+        self.start_time = time.time()
+        self.last_harvest_time = time.time()
+        self.last_position_update = time.time()
+        self.last_position=None
+        # 模拟数据相关
+        self.is_working = False
+        self.work_mode = "idle"  # idle, moving, harvesting
+        self.harvest_rate = 0.5  # 每分钟采摘数量
+        self.movement_speed = 0.3  # m/s
+        self.position_noise = 0.00005  # 位置噪声
         
         # 创建定时器发布状态
-        self.create_timer(1.0 / self.status_rate, self.publish_status)
+        self.status_timer = self.create_timer(2.0, self.publish_status)
+        self.simulation_timer = self.create_timer(5.0, self.update_simulation_data)
         
         # 紧急停止标志
         self.emergency_stop = False
@@ -309,7 +348,11 @@ class RobotControlNode(Node):
     def publish_status(self):
         """发布机器人状态"""
         # 模拟一些状态数据（实际应用中应从传感器读取）
-        import psutil
+        try:
+            import psutil
+            cpu_usage = psutil.cpu_percent(interval=0.1)
+        except ImportError:
+            cpu_usage = random.uniform(20, 80)  # 如果没有psutil，使用随机值
         
         status_msg = RobotStatus()
         status_msg.header.stamp = self.get_clock().now().to_msg()
@@ -317,7 +360,7 @@ class RobotControlNode(Node):
         
         # 基本状态 - 确保所有字段都是正确的类型
         status_msg.battery_level = float(self.battery_level)
-        status_msg.cpu_usage = float(psutil.cpu_percent(interval=0.1))
+        status_msg.cpu_usage = float(cpu_usage)
         status_msg.current_speed = float(self.current_speed)
         status_msg.current_direction = float(self.current_direction)
         
@@ -338,8 +381,8 @@ class RobotControlNode(Node):
         
         # 其他状态
         status_msg.emergency_stop = bool(self.emergency_stop)
-        status_msg.is_moving = bool(self.current_direction != DIR_STOP)
-        status_msg.is_harvesting = False  # 默认值
+        status_msg.is_moving = bool(self.current_direction != DIR_STOP or self.work_mode == "moving")
+        status_msg.is_harvesting = bool(self.work_mode == "harvesting")
         
         # 网络信息
         status_msg.signal_strength = int(self.signal_strength)
@@ -348,8 +391,12 @@ class RobotControlNode(Node):
         # 状态描述
         if self.emergency_stop:
             status_msg.status_text = "紧急停止"
-        elif self.current_direction != DIR_STOP:
+        elif self.work_mode == "harvesting":
+            status_msg.status_text = "正在采摘"
+        elif self.work_mode == "moving" or self.current_direction != DIR_STOP:
             status_msg.status_text = "移动中"
+        elif self.is_working:
+            status_msg.status_text = "工作中"
         else:
             status_msg.status_text = "待机"
         
@@ -359,6 +406,109 @@ class RobotControlNode(Node):
         status_msg.location_name = "苹果园区3号地块"
         
         self.status_pub.publish(status_msg)
+        
+        # 打印调试信息（每10次发布打印一次）
+        if hasattr(self, '_status_count'):
+            self._status_count += 1
+        else:
+            self._status_count = 1
+            
+        if self._status_count % 10 == 0:
+            self.get_logger().info(
+                f'状态发布 - 今日采摘: {self.today_harvested}, '
+                f'作业面积: {self.working_area:.3f}亩, '
+                f'工作时长: {self.working_hours:.2f}小时, '
+                f'电池: {self.battery_level:.1f}%, '
+                f'模式: {self.work_mode}'
+            )
+    
+    def update_simulation_data(self):
+        """更新模拟数据"""
+        current_time = time.time()
+        
+        # 更新工作时长
+        if self.is_working:
+            self.working_hours = (current_time - self.start_time) / 3600.0
+        
+        # 模拟位置变化（如果正在移动）
+        if self.current_direction != DIR_STOP or self.work_mode == "moving":
+            # 添加随机位置变化模拟移动
+            lat_change = random.uniform(-self.position_noise, self.position_noise)
+            lon_change = random.uniform(-self.position_noise, self.position_noise)
+            
+            # 更新位置
+            old_lat = self.position['latitude']
+            old_lon = self.position['longitude']
+            
+            self.position['latitude'] += lat_change
+            self.position['longitude'] += lon_change
+            
+            # 计算移动距离并累加作业面积
+            if self.last_position is not None:
+                distance = self.calculate_distance(
+                    old_lat, old_lon, 
+                    self.position['latitude'], self.position['longitude']
+                )
+                # 假设作业宽度为2米，将距离转换为面积（亩）
+                area_increment = (distance * 2) / 666.67  # 1亩 = 666.67平方米
+                self.working_area += area_increment
+            
+            self.last_position = (self.position['latitude'], self.position['longitude'])
+        
+        # 模拟采摘过程
+        if self.work_mode == "harvesting" or (self.is_working and random.random() < 0.3):
+            # 30%的概率进行采摘
+            time_since_last_harvest = current_time - self.last_harvest_time
+            
+            if time_since_last_harvest > 10:  # 至少10秒间隔
+                # 模拟一次采摘
+                new_harvest = random.randint(1, 5)  # 一次采摘1-5个
+                self.harvested_count += new_harvest
+                self.today_harvested += new_harvest
+                self.total_harvested += new_harvest
+                self.last_harvest_time = current_time
+                
+                # 随机更新工作模式
+                self.work_mode = random.choice(["harvesting", "moving", "idle"])
+                
+                self.get_logger().info(f'模拟采摘: +{new_harvest}, 今日总计: {self.today_harvested}')
+        
+        # 模拟电池消耗
+        if self.is_working:
+            battery_drain = random.uniform(0.1, 0.3)  # 每次消耗0.1-0.3%
+            self.battery_level = max(10, self.battery_level - battery_drain)
+        
+        # 模拟设备温度变化
+        if self.is_working:
+            self.temperature += random.uniform(-0.5, 1.0)
+        else:
+            self.temperature += random.uniform(-0.3, 0.3)
+        self.temperature = max(20, min(40, self.temperature))  # 限制在20-40度
+        
+        # 随机改变工作状态
+        if random.random() < 0.1:  # 10%概率改变工作状态
+            self.is_working = not self.is_working
+            if self.is_working:
+                self.get_logger().info('开始工作模拟')
+            else:
+                self.get_logger().info('停止工作模拟')
+    
+    def calculate_distance(self, lat1, lon1, lat2, lon2):
+        """计算两点间距离（米）"""
+        # 使用Haversine公式
+        R = 6371000  # 地球半径（米）
+        
+        dlat = math.radians(lat2 - lat1)
+        dlon = math.radians(lon2 - lon1)
+        
+        a = (math.sin(dlat/2) * math.sin(dlat/2) + 
+             math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * 
+             math.sin(dlon/2) * math.sin(dlon/2))
+        
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1-a))
+        distance = R * c
+        
+        return distance
     
     def destroy_node(self):
         """清理资源"""
