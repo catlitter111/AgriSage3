@@ -47,6 +47,8 @@ setup(
             'servo_control_node = bottle_detection_ros2.servo_control_node:main',
             'auto_harvest_controller = bottle_detection_ros2.auto_harvest_controller:main',
             'debug_visualizer_gui = bottle_detection_ros2.debug_visualizer_gui:main',
+            'laser_obstacle_avoidance = bottle_detection_ros2.laser_obstacle_avoidance:main',
+            'test_lidar_integration = bottle_detection_ros2.test_lidar_integration:main',
         ],
     },
 )

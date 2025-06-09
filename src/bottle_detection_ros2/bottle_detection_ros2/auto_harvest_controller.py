@@ -121,7 +121,7 @@ class AutoHarvestController(Node):
         )
         
         # 创建发布者
-        self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel', 10)
+        self.cmd_vel_pub = self.create_publisher(Twist, 'cmd_vel_raw', 10)  # 发布到原始话题，由避障控制器处理
         self.harvest_cmd_pub = self.create_publisher(HarvestCommand, 'robot/harvest_command', 10)
         self.servo_cmd_pub = self.create_publisher(ServoCommand, 'servo/command', 10)
         self.tracking_pub = self.create_publisher(Point, 'servo/tracking_target', 10)
