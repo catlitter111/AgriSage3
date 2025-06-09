@@ -26,6 +26,10 @@ setup(
         (os.path.join('share', package_name, 'config'), 
             glob('config/*.yaml')),
         
+        # 安装RViz配置文件
+        (os.path.join('share', package_name, 'rviz'), 
+            glob('rviz/*.rviz')),
+        
         # 安装消息文件
         (os.path.join('share', package_name, 'msg'), 
             glob('msg/*.msg')),
@@ -54,6 +58,9 @@ setup(
             
             # 硬件节点
             'laser_obstacle_avoidance = bottle_detection_ros2.core.hardware.laser_obstacle_avoidance:main',
+            
+            # 导航节点
+            'slam_mapping_node = bottle_detection_ros2.nodes.navigation.slam_mapping_node:main',
             
             # GUI和调试工具
             'debug_visualizer_gui = bottle_detection_ros2.gui.debug_visualizer_gui:main',

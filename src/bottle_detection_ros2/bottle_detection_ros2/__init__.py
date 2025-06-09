@@ -45,7 +45,7 @@ from .core.processing.bottle_rknn_pool import BottleRKNNPoolExecutor
 
 __all__ = [
     'StereoCamera',
-    'BottleDetector', 
+    'BottleDetector',
     'BottleRKNNPoolExecutor',
     'MedianFilter',
     'calculate_3d_position',
