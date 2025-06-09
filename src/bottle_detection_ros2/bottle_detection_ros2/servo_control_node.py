@@ -24,11 +24,11 @@ SERVO_MODE = 3  # 180度顺时针模式
 
 # 机械臂采摘动作指令
 ARM_COMMANDS = {
-    "rt_start": "#000P1250T2000!#001P0900T2000!#002P2000T2000!#003P0800T2000!#004P1500T1500!#005P1200T2000!",
-    "rt_catch1": "#000P1250T2000!#001P0900T2000!#002P1750T2000!#003P1200T2000!#004P1500T2000!#005P1850T2000!",
-    "rt_catch2": "#000P2500T2000!#001P1400T2000!#002P1850T2000!#003P1700T2000!#004P1500T2000!#005P1850T2000!",
-    "rt_catch3": "#000P2500T1500!#001P1300T1500!#002P2000T1500!#003P1700T1500!#004P1500T1500!#005P1200T1500!",
-    "rt_catch4": "#000P1250T2000!#001P0900T2000!#002P2000T2000!#003P0800T2000!#004P1500T2000!#005P1200T2000!"
+    "rt_catch1": "#002P1650T2000!#003P1300T2000!#005P1700T2000!",
+    "rt_catch2": "#002P1650T2000!#003P1300T2000!#005P1950T2000!",
+    "rt_catch3": "#000P2200T2000!#001P1600T2000!#002P1850T2000!#003P2300T2000!#005P1950T2000!",
+    "rt_catch4": "#000P2200T2000!#001P1600T2000!#002P1850T2000!#003P2300T2000!#005P1700T0500!",
+    "rt_catch5": "#000P1380T1500!#001P0650T1500!#002P2150T1500!#003P0750T1500!#004P1970T1500!#005P1700T1500!"
 }
 
 # 采摘状态
@@ -39,6 +39,55 @@ HARVEST_STEP2 = 3
 HARVEST_STEP3 = 4
 HARVEST_STEP4 = 5
 HARVEST_COMPLETE = 6
+
+
+class PIDController:
+    """PID控制器类"""
+    
+    def __init__(self, kp=1.0, ki=0.0, kd=0.0, output_limit=None):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.output_limit = output_limit
+        
+        self.last_error = 0.0
+        self.integral = 0.0
+        self.last_time = time.time()
+        
+    def update(self, error):
+        current_time = time.time()
+        dt = current_time - self.last_time
+        
+        if dt <= 0.0:
+            dt = 0.01
+            
+        # 比例项
+        proportional = self.kp * error
+        
+        # 积分项
+        self.integral += error * dt
+        integral_term = self.ki * self.integral
+        
+        # 微分项
+        derivative = (error - self.last_error) / dt
+        derivative_term = self.kd * derivative
+        
+        # PID输出
+        output = proportional + integral_term + derivative_term
+        
+        # 输出限制
+        if self.output_limit:
+            output = max(self.output_limit[0], min(self.output_limit[1], output))
+            
+        self.last_error = error
+        self.last_time = current_time
+        
+        return output
+    
+    def reset(self):
+        self.last_error = 0.0
+        self.integral = 0.0
+        self.last_time = time.time()
 
 
 class ServoControlNode(Node):
@@ -67,6 +116,45 @@ class ServoControlNode(Node):
         self.serial = None
         self.serial_lock = threading.Lock()
         self.connect_serial()
+        
+        # 舵机PWM范围设置
+        self.horizontal_servo_range = (500, 2500)  # 水平方向180度
+        self.vertical_servo_range = (500, 1500)    # 垂直方向90度
+        
+        # 舵机中心位置
+        self.horizontal_servo_center = (self.horizontal_servo_range[0] + self.horizontal_servo_range[1]) // 2  # 1500
+        self.vertical_servo_center = 600     # 600
+        
+        # 像素到PWM的转换比例 (像素变化1.1，PWM变化1)
+        self.pixel_to_pwm_ratio = 1.0 / 1.1  # 约0.909
+        
+        # 初始化PID控制器 - 调整输出限制范围
+        max_horizontal_change = (self.horizontal_servo_range[1] - self.horizontal_servo_range[0]) // 4  # 最大变化量
+        max_vertical_change = (self.vertical_servo_range[1] - self.vertical_servo_range[0]) // 4
+        
+        self.horizontal_pid = PIDController(
+            kp=0.8, ki=0.02, kd=0.3, output_limit=(-max_horizontal_change, max_horizontal_change)
+        )
+        self.vertical_pid = PIDController(
+            kp=0.8, ki=0.02, kd=0.3, output_limit=(-max_vertical_change, max_vertical_change)
+        )
+        
+        # 当前舵机位置
+        self.current_horizontal_pos = self.horizontal_servo_center
+        self.current_vertical_pos = self.vertical_servo_center
+        
+        # 死区和平滑参数
+        self.dead_zone_x = 30
+        self.dead_zone_y = 30
+        self.smooth_factor = 0.85
+        
+        # 运动阈值 - 调整为PWM单位
+        self.horizontal_movement_threshold = 5  # PWM单位
+        self.vertical_movement_threshold = 5    # PWM单位
+        
+        # 系统状态
+        self.tracking_enabled = False
+        self.show_debug = True
         
         # 创建订阅者
         self.servo_cmd_sub = self.create_subscription(
@@ -111,26 +199,20 @@ class ServoControlNode(Node):
         
         # 跟踪相关变量
         self.tracking_active = False
-        self.stop_flag_x = 1
-        self.read_flag_x = 1
-        self.send_left = 1
-        self.send_right = 1
-        self.pid_start_x = 0
-        
-        self.stop_flag_y = 1
-        self.read_flag_y = 1
-        self.send_up = 1
-        self.send_down = 1
-        self.pid_start_y = 0
-        
-        # 初始化舵机
-        self.initialize_servos()
         
         # 创建定时器处理采摘状态机
         self.create_timer(0.1, self.harvest_state_machine)
         
         # 创建状态发布定时器
         self.create_timer(0.5, self.publish_status)
+        
+        # 初始化舵机（在连接串口后）
+        if self.serial:
+            self._initialize_servos()
+            # 设置机械臂到初始位置
+            self.set_initial_position()
+            time.sleep(1)
+            self.get_logger().info("舵机已初始化并设置到初始位置")
         
         self.get_logger().info(
             f'舵机控制节点已启动\n'
@@ -174,6 +256,72 @@ class ServoControlNode(Node):
                 self.get_logger().error(f'发送命令失败: {e}')
                 return None
     
+    def _initialize_servos(self):
+        """初始化舵机到中心位置"""
+        # 设置舵机模式 - 注释掉了
+        # 移动到中心位置
+        command = f"#{0:03d}P{self.horizontal_servo_center:04d}T{1000:04d}!#{1:03d}P{self.vertical_servo_center:04d}T{1000:04d}!"
+        self.send_command(command)
+        time.sleep(1.5)
+        self.get_logger().info(f"舵机初始化完成 - 水平:{self.horizontal_servo_center}, 垂直:{self.vertical_servo_center}")
+        
+        # 更新当前位置记录
+        self.current_positions[0] = self.horizontal_servo_center
+        self.current_positions[1] = self.vertical_servo_center
+    
+    def set_initial_position(self):
+        """设置机械臂到初始位置"""
+        command = "#000P1380T1500!#001P0650T1500!#002P2150T1500!#003P0750T1500!#004P1970T1500!#005P1670T1500!"
+        return self.send_command(command)
+    
+    def center_servo(self, servo_id):
+        """将舵机移动到中心位置"""
+        return self.move_servo(servo_id, CENTER_POSITION, 5000)
+    
+    def set_mode(self, servo_id, mode):
+        """设置舵机工作模式"""
+        mode = max(1, min(8, mode))
+        command = f"#{servo_id:03d}PMOD{mode}!"
+        response = self.send_command(command, wait_for_response=True)
+        return response and response == "#OK!"
+    
+    def receive_catch(self, timeout=0.1):
+        """非阻塞方式接收舵机数据"""
+        try:
+            with self.serial_lock:
+                # 保存原始超时设置
+                original_timeout = self.serial.timeout
+                
+                # 设置较短的超时时间
+                self.serial.timeout = timeout
+                
+                # 尝试读取数据
+                data = self.serial.read(256)
+                
+                # 恢复原始超时设置
+                self.serial.timeout = original_timeout
+                
+                if data:
+                    # 假设数据是字符串格式类似 "#000P1000!\r\n"
+                    data_str = data.decode('utf-8').strip()
+                    self.get_logger().debug(f"接收到数据: {data_str}")
+                    
+                    # 提取舵机编号和角度
+                    if data_str.startswith("#") and data_str.endswith("!"):
+                        data_content = data_str.strip("#!").strip().strip("\r\n")
+                        parts = data_content.split('P')
+                        if len(parts) >= 2:
+                            servo_id = parts[0]
+                            angle = int(parts[1].split('!')[0])  # 以防有其他字符
+                            self.get_logger().info(f"舵机编号: {servo_id}, 角度: {angle}")
+                            return int(angle)
+                    else:
+                        self.get_logger().debug("数据格式不正确")
+                return None
+        except Exception as e:
+            self.get_logger().error(f"接收失败: {e}")
+            return None
+    
     def move_servo(self, servo_id, position, time_ms=1000):
         """控制舵机移动到指定位置"""
         # 确保参数在有效范围内
@@ -189,53 +337,87 @@ class ServoControlNode(Node):
         command = f"#{servo_id:03d}P{position:04d}T{time_ms:04d}!"
         return self.send_command(command)
     
-    def set_mode(self, servo_id, mode):
-        """设置舵机工作模式"""
-        mode = max(1, min(8, mode))
-        command = f"#{servo_id:03d}PMOD{mode}!"
-        response = self.send_command(command, wait_for_response=True)
-        return response and response == "#OK!"
-    
-    def stop_servo(self, servo_id):
-        """立即停止舵机"""
-        command = f"#{servo_id:03d}PDST!"
-        return self.send_command(command)
-    
-    def read_position(self, servo_id):
-        """读取舵机当前位置"""
-        command = f"#{servo_id:03d}PRAD!"
-        response = self.send_command(command, wait_for_response=True)
-        
-        if response and response.startswith(f"#{servo_id:03d}P") and response.endswith("!"):
-            try:
-                position_str = response[5:-1]
-                position = int(position_str)
-                return position
-            except Exception as e:
-                self.get_logger().error(f'解析舵机位置错误: {e}')
-                return None
-        return None
-    
-    def initialize_servos(self):
-        """初始化所有舵机"""
-        if not self.serial:
+    def track_object(self, frame_width, frame_height, center_x, center_y):
+        """跟踪物体，控制舵机使其保持在画面中心"""
+        if center_x is None or center_y is None:
             return
         
-        # 设置主舵机为180度顺时针模式
-        self.set_mode(DEFAULT_SERVO_ID, SERVO_MODE)
+        # 计算图像中心
+        frame_center_x = frame_width // 2 + 80
+        frame_center_y = frame_height // 2
         
-        # 将所有舵机移动到初始位置
-        self.set_initial_position()
+        # 计算像素误差
+        pixel_error_x = center_x - frame_center_x
+        pixel_error_y = center_y - frame_center_y
         
-        # 将主舵机居中
-        self.move_servo(DEFAULT_SERVO_ID, CENTER_POSITION, 2000)
+        # 将像素误差转换为PWM误差
+        pwm_error_x = pixel_error_x * self.pixel_to_pwm_ratio
+        pwm_error_y = pixel_error_y * self.pixel_to_pwm_ratio
         
-        self.get_logger().info('舵机初始化完成')
-    
-    def set_initial_position(self):
-        """设置机械臂到初始位置"""
-        command = "#000P1250T1500!#001P0900T1500!#002P2000T1500!#003P0800T1500!#004P1500T1500!#005P1200T1500!"
-        return self.send_command(command)
+        # 死区检测
+        if abs(pixel_error_x) < self.dead_zone_x:
+            pixel_error_x = 0
+            pwm_error_x = 0
+        if abs(pixel_error_y) < self.dead_zone_y:
+            pixel_error_y = 0
+            pwm_error_y = 0
+        
+        # PID控制
+        if pixel_error_x != 0 or pixel_error_y != 0:
+            horizontal_output = self.horizontal_pid.update(pwm_error_x)
+            vertical_output = self.vertical_pid.update(pwm_error_y)
+            
+            new_h_pos = None
+            new_v_pos = None
+            
+            # 水平舵机控制
+            if abs(horizontal_output) > self.horizontal_movement_threshold:
+                new_h_pos = self.current_horizontal_pos - horizontal_output
+                
+                # 平滑滤波
+                new_h_pos = (self.smooth_factor * self.current_horizontal_pos + 
+                            (1 - self.smooth_factor) * new_h_pos)
+                
+                # 限制在水平舵机范围内
+                new_h_pos = max(self.horizontal_servo_range[0], 
+                               min(self.horizontal_servo_range[1], int(new_h_pos)))
+            
+            # 垂直舵机控制
+            if abs(vertical_output) > self.vertical_movement_threshold:
+                new_v_pos = self.current_vertical_pos - vertical_output
+                
+                # 平滑滤波
+                new_v_pos = (self.smooth_factor * self.current_vertical_pos + 
+                            (1 - self.smooth_factor) * new_v_pos)
+                
+                # 限制在垂直舵机范围内
+                new_v_pos = max(self.vertical_servo_range[0], 
+                               min(self.vertical_servo_range[1], int(new_v_pos)))
+            
+            # 发送命令
+            if new_h_pos is not None and new_v_pos is not None:
+                # 只有当两个位置都需要更新且变化足够大时才发送组合命令
+                if abs(new_h_pos - self.current_horizontal_pos) > 3 and abs(new_v_pos - self.current_vertical_pos) > 3:
+                    command = f"#{0:03d}P{new_h_pos:04d}T{abs(new_h_pos - self.current_horizontal_pos):04d}!#{1:03d}P{new_v_pos:04d}T{abs(new_v_pos - self.current_vertical_pos):04d}!"
+                    self.send_command(command)
+                    self.current_horizontal_pos = new_h_pos
+                    self.current_vertical_pos = new_v_pos
+                    self.current_positions[0] = new_h_pos
+                    self.current_positions[1] = new_v_pos
+            elif new_h_pos is not None:
+                # 只更新水平位置
+                if abs(new_h_pos - self.current_horizontal_pos) > 3:
+                    command = f"#{0:03d}P{new_h_pos:04d}T{abs(new_h_pos - self.current_horizontal_pos):04d}!"
+                    self.send_command(command)
+                    self.current_horizontal_pos = new_h_pos
+                    self.current_positions[0] = new_h_pos
+            elif new_v_pos is not None:
+                # 只更新垂直位置
+                if abs(new_v_pos - self.current_vertical_pos) > 3:
+                    command = f"#{1:03d}P{new_v_pos:04d}T{abs(new_v_pos - self.current_vertical_pos):04d}!"
+                    self.send_command(command)
+                    self.current_vertical_pos = new_v_pos
+                    self.current_positions[1] = new_v_pos
     
     def servo_command_callback(self, msg):
         """舵机命令回调"""
@@ -258,131 +440,16 @@ class ServoControlNode(Node):
     
     def tracking_target_callback(self, msg):
         """跟踪目标回调"""
-        if not self.enable_tracking or not self.tracking_active:
+        if not self.enable_tracking:
             return
         
         # 执行舵机跟踪
         self.track_object(
-            int(640),  # frame_width
-            int(480),  # frame_height
+            int(msg.z),  # frame_width (存储在z中)
+            int(480),    # frame_height (假设固定)
             int(msg.x),  # object_cx
             int(msg.y)   # object_cy
         )
-    
-    def track_object(self, frame_width, frame_height, object_cx, object_cy):
-        """跟踪物体 - 与原始代码相同的逻辑"""
-        # X轴跟踪
-        frame_center_x = frame_width // 2 + 80
-        offset_x = frame_center_x - object_cx
-        
-        if abs(object_cx - frame_center_x) <= self.tracking_deadzone:
-            if self.stop_flag_x == 1:
-                command = "#{:03d}PDST!".format(0)
-                self.send_command(command)
-                self.stop_flag_x = 0
-                self.read_flag_x = 1
-                self.send_left = 1
-                self.send_right = 1
-        else:
-            self.stop_flag_x = 1
-            if self.read_flag_x == 1:
-                command = "#{:03d}PRAD!".format(0)
-                self.send_command(command)
-                self.pid_start_x = self.receive_catch()
-                self.read_flag_x = 0
-            else:
-                if frame_center_x - object_cx > self.tracking_deadzone:
-                    if self.pid_start_x > 2100:
-                        command = "#{:03d}PDST!".format(0)
-                    else:
-                        temp = int((2167 - self.pid_start_x) * self.tracking_speed)
-                        if temp < 4000:
-                            temp = 4000
-                        command = "#{:03d}P{:04d}T{:04d}!".format(0, 2167, temp)
-                    if self.send_left == 1:
-                        self.send_command(command)
-                        self.send_left = 0
-                        self.send_right = 1
-                elif object_cx - frame_center_x > self.tracking_deadzone:
-                    if self.pid_start_x < 833:
-                        command = "#{:03d}PDST!".format(0)
-                    else:
-                        temp = int((self.pid_start_x - 833) * self.tracking_speed)
-                        if temp < 3000:
-                            temp = 3000
-                        command = "#{:03d}P{:04d}T{:04d}!".format(0, 833, temp)
-                    if self.send_right == 1:
-                        self.send_command(command)
-                        self.send_right = 0
-                        self.send_left = 1
-        
-        # Y轴跟踪
-        frame_center_y = frame_height // 2
-        offset_y = frame_center_y - object_cy
-        
-        if abs(object_cy - frame_center_y) <= self.tracking_deadzone:
-            if self.stop_flag_y == 1:
-                command = "#{:03d}PDST!".format(1)
-                self.send_command(command)
-                self.stop_flag_y = 0
-                self.read_flag_y = 1
-                self.send_up = 1
-                self.send_down = 1
-        else:
-            self.stop_flag_y = 1
-            if self.read_flag_y == 1:
-                command = "#{:03d}PRAD!".format(1)
-                self.send_command(command)
-                self.pid_start_y = self.receive_catch()
-                self.read_flag_y = 0
-            else:
-                if frame_center_y - object_cy > self.tracking_deadzone:
-                    if self.pid_start_y > 1480:
-                        command = "#{:03d}PDST!".format(1)
-                    else:
-                        temp = int((1500 - self.pid_start_y) * self.tracking_speed)
-                        if temp < 4000:
-                            temp = 4000
-                        command = "#{:03d}P{:04d}T{:04d}!".format(1, 1500, temp)
-                    if self.send_up == 1:
-                        self.send_command(command)
-                        self.send_up = 0
-                        self.send_down = 1
-                elif object_cy - frame_center_y > self.tracking_deadzone:
-                    if self.pid_start_y < 882:
-                        command = "#{:03d}PDST!".format(1)
-                    else:
-                        temp = int((self.pid_start_y - 882) * self.tracking_speed)
-                        if temp < 3000:
-                            temp = 3000
-                        command = "#{:03d}P{:04d}T{:04d}!".format(1, 882, temp)
-                    if self.send_down == 1:
-                        self.send_command(command)
-                        self.send_down = 0
-                        self.send_up = 1
-    
-    def receive_catch(self, timeout=0.1):
-        """非阻塞方式接收舵机数据"""
-        try:
-            with self.serial_lock:
-                original_timeout = self.serial.timeout
-                self.serial.timeout = timeout
-                
-                data = self.serial.read(256)
-                self.serial.timeout = original_timeout
-                
-                if data:
-                    data_str = data.decode('utf-8').strip()
-                    if data_str.startswith("#") and data_str.endswith("!"):
-                        data_content = data_str.strip("#!").strip().strip("\r\n")
-                        parts = data_content.split('P')
-                        if len(parts) >= 2:
-                            angle = int(parts[1].split('!')[0])
-                            return angle
-            return None
-        except Exception as e:
-            self.get_logger().error(f'接收数据失败: {e}')
-            return None
     
     def start_harvest(self):
         """开始采摘"""
@@ -417,42 +484,44 @@ class ServoControlNode(Node):
         
         if self.harvest_state == HARVEST_STARTED:
             # 发送初始指令
-            self.send_command(ARM_COMMANDS["rt_start"])
+            self.send_command(ARM_COMMANDS["rt_catch1"])
             self.get_logger().info('采摘步骤1: 机械臂就位')
             self.harvest_state = HARVEST_STEP1
             self.harvest_step_time = current_time
             
         elif self.harvest_state == HARVEST_STEP1 and current_time - self.harvest_step_time > 2.0:
             # 第一步完成
-            self.send_command(ARM_COMMANDS["rt_catch1"])
-            self.get_logger().info('采摘步骤2: 准备抓取')
+            self.send_command(ARM_COMMANDS["rt_catch2"])
+            self.get_logger().info('采摘步骤2: 抓取')
             self.harvest_state = HARVEST_STEP2
             self.harvest_step_time = current_time
             
         elif self.harvest_state == HARVEST_STEP2 and current_time - self.harvest_step_time > 2.0:
             # 第二步完成
-            self.send_command(ARM_COMMANDS["rt_catch2"])
-            self.get_logger().info('采摘步骤3: 抓取目标')
+            self.send_command(ARM_COMMANDS["rt_catch3"])
+            self.get_logger().info('采摘步骤3: 松回目标')
             self.harvest_state = HARVEST_STEP3
             self.harvest_step_time = current_time
             
         elif self.harvest_state == HARVEST_STEP3 and current_time - self.harvest_step_time > 2.0:
             # 第三步完成
-            self.send_command(ARM_COMMANDS["rt_catch3"])
-            self.get_logger().info('采摘步骤4: 抬升目标')
+            self.send_command(ARM_COMMANDS["rt_catch4"])
+            self.get_logger().info('采摘步骤4: 放置目标')
             self.harvest_state = HARVEST_STEP4
             self.harvest_step_time = current_time
             
         elif self.harvest_state == HARVEST_STEP4 and current_time - self.harvest_step_time > 2.0:
             # 第四步完成
-            self.send_command(ARM_COMMANDS["rt_catch4"])
+            self.send_command(ARM_COMMANDS["rt_catch5"])
             self.get_logger().info('采摘步骤5: 返回初始位置')
             self.harvest_state = HARVEST_COMPLETE
             self.harvest_step_time = current_time
             
+            # 增加采摘计数
+            self.harvested_count += 1
+            
         elif self.harvest_state == HARVEST_COMPLETE and current_time - self.harvest_step_time > 2.0:
             # 采摘完成
-            self.harvested_count += 1
             self.get_logger().info(f'采摘完成，总计: {self.harvested_count}')
             
             # 发布采摘完成状态
@@ -460,12 +529,33 @@ class ServoControlNode(Node):
             status_msg.data = json.dumps({
                 "state": "completed",
                 "harvested_count": self.harvested_count,
+                "harvest_completed": True,
                 "timestamp": time.time()
             })
             self.harvest_status_pub.publish(status_msg)
             
             # 重置状态
             self.harvest_state = HARVEST_IDLE
+    
+    def stop_servo(self, servo_id):
+        """立即停止舵机"""
+        command = f"#{servo_id:03d}PDST!"
+        return self.send_command(command)
+    
+    def read_position(self, servo_id):
+        """读取舵机当前位置"""
+        command = f"#{servo_id:03d}PRAD!"
+        response = self.send_command(command, wait_for_response=True)
+        
+        if response and response.startswith(f"#{servo_id:03d}P") and response.endswith("!"):
+            try:
+                position_str = response[5:-1]
+                position = int(position_str)
+                return position
+            except Exception as e:
+                self.get_logger().error(f'解析舵机位置错误: {e}')
+                return None
+        return None
     
     def publish_status(self):
         """发布舵机状态"""
@@ -490,8 +580,9 @@ class ServoControlNode(Node):
         for i in range(6):
             self.stop_servo(i)
         
-        # 设置到初始位置
-        self.set_initial_position()
+        # 设置到初始位置（不调用center_servo）
+        if self.serial and self.serial.is_open:
+            self.set_initial_position()
         
         # 关闭串口
         if self.serial and self.serial.is_open:

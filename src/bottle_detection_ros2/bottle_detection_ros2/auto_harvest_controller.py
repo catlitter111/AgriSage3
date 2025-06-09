@@ -15,10 +15,10 @@ import time
 import threading
 
 # 距离阈值（米）
-DISTANCE_FAR = 1.2      # 远距离阈值
-DISTANCE_NEAR = 0.8     # 近距离阈值
-DISTANCE_HARVEST = 0.5  # 采摘距离阈值
-DISTANCE_STOP = 0.3     # 停止距离
+DISTANCE_FAR = 0.6      # 远距离阈值，超过此距离使用电机调整方向
+DISTANCE_NEAR = 0.35    # 近距离阈值，低于此距离使用舵机调整方向
+DISTANCE_HARVEST = 0.36 # 采摘距离阈值，低于此距离开始采摘
+DISTANCE_STOP = 0.42    # 停止距离
 
 # 图像中心死区（像素）
 CENTER_DEADZONE = 80
@@ -26,6 +26,9 @@ CENTER_DEADZONE = 80
 # 控制模式
 MODE_MANUAL = "manual"
 MODE_AUTO = "auto"
+
+# 最大可能距离
+MAX_POSSIBLE_DISTANCE = 10.0  # 米
 
 
 class AutoHarvestController(Node):
@@ -37,10 +40,10 @@ class AutoHarvestController(Node):
         # 声明参数
         self.declare_parameter('control_rate', 10.0)  # Hz
         self.declare_parameter('search_timeout', 5.0)  # 秒
-        self.declare_parameter('approach_speed', 0.3)  # m/s
-        self.declare_parameter('turn_speed', 0.5)  # rad/s
-        self.declare_parameter('fine_approach_speed', 0.1)  # m/s
-        self.declare_parameter('fine_turn_speed', 0.3)  # rad/s
+        self.declare_parameter('approach_speed', 30)  # 百分比
+        self.declare_parameter('turn_speed', 20)  # 百分比
+        self.declare_parameter('fine_approach_speed', 10)  # 百分比
+        self.declare_parameter('fine_turn_speed', 15)  # 百分比
         
         # 获取参数
         self.control_rate = self.get_parameter('control_rate').value
@@ -102,12 +105,16 @@ class AutoHarvestController(Node):
         self.last_detection_time = time.time()
         self.searching = False
         
+        # 当前运动状态
+        self.current_direction = 0x04  # DIR_STOP
+        self.current_speed = 50
+        
         # 控制锁
         self.control_lock = threading.Lock()
         
         # 创建控制定时器
         self.control_timer = self.create_timer(
-            1.0 / self.control_rate,
+            0.1,  # 10Hz控制频率
             self.control_loop
         )
         
@@ -147,10 +154,6 @@ class AutoHarvestController(Node):
                     self.nearest_distance = bottle_info.get("distance", None)
                     self.last_detection_time = time.time()
                     
-                # 获取图像尺寸（假设在某处提供）
-                # self.frame_width = data.get("frame_width", 640)
-                # self.frame_height = data.get("frame_height", 480)
-                
         except Exception as e:
             self.get_logger().error(f'解析检测数据错误: {e}')
     
@@ -177,6 +180,11 @@ class AutoHarvestController(Node):
     
     def control_loop(self):
         """主控制循环"""
+        # 手动模式下的舵机跟踪
+        if self.current_mode == MODE_MANUAL and self.bottle_visible:
+            self._manual_servo_control()
+            return
+        
         # 只在自动模式且激活采摘时执行
         if self.current_mode != MODE_AUTO or not self.auto_harvest_active:
             return
@@ -199,21 +207,31 @@ class AutoHarvestController(Node):
             # 如果检测到瓶子
             if self.bottle_visible and self.nearest_distance is not None:
                 self.searching = False
+                # 检查距离值是否合理
+                if self.nearest_distance > MAX_POSSIBLE_DISTANCE:
+                    self.get_logger().warn(f'检测到异常距离值: {self.nearest_distance}m, 忽略此次控制')
+                    return
                 self.approach_bottle()
             else:
                 # 没有检测到瓶子，停止
                 self.stop_robot()
     
+    def _manual_servo_control(self):
+        """手动模式下的舵机控制 - 检测到瓶子时直接控制舵机跟踪，不考虑距离"""
+        # 发布跟踪目标
+        tracking_msg = Point()
+        tracking_msg.x = float(self.bottle_cx)
+        tracking_msg.y = float(self.bottle_cy)
+        tracking_msg.z = float(self.frame_width)  # 传递图像宽度
+        
+        self.tracking_pub.publish(tracking_msg)
+        self.get_logger().debug(f"手动模式舵机跟踪: 坐标=({self.bottle_cx},{self.bottle_cy})")
+    
     def approach_bottle(self):
         """接近瓶子的控制逻辑"""
-        # 验证距离值的合理性
-        if self.nearest_distance > 10.0:  # 超过10米认为是异常值
-            self.get_logger().warn(f'检测到异常距离: {self.nearest_distance}m')
-            return
-        
         # 计算偏移
         center_x = self.frame_width // 2
-        offset_x = self.bottle_cx - center_x
+        offset_x = center_x - self.bottle_cx
         
         # 根据距离选择控制策略
         if self.nearest_distance > DISTANCE_FAR:
@@ -225,12 +243,9 @@ class AutoHarvestController(Node):
         elif self.nearest_distance > DISTANCE_HARVEST:
             # 近距离：使用舵机跟踪
             self.approach_near(offset_x)
-        elif self.nearest_distance > DISTANCE_STOP:
+        else:
             # 采摘距离：停止并采摘
             self.stop_and_harvest(offset_x)
-        else:
-            # 太近，后退
-            self.back_away()
     
     def approach_far(self, offset_x):
         """远距离接近策略"""
@@ -239,17 +254,24 @@ class AutoHarvestController(Node):
         # 大偏移时先转向
         if abs(offset_x) > CENTER_DEADZONE * 2:
             if offset_x > 0:
-                # 瓶子在右边，向右转
-                twist.angular.z = -self.turn_speed
-                self.get_logger().debug('远距离：向右转')
-            else:
                 # 瓶子在左边，向左转
-                twist.angular.z = self.turn_speed
-                self.get_logger().debug('远距离：向左转')
+                twist.angular.z = 0.5  # rad/s
+                self.current_direction = 0x02  # DIR_LEFT
+                self.get_logger().info('远距离：瓶子在左侧，向左转')
+            else:
+                # 瓶子在右边，向右转
+                twist.angular.z = -0.5  # rad/s
+                self.current_direction = 0x03  # DIR_RIGHT
+                self.get_logger().info('远距离：瓶子在右侧，向右转')
+            
+            # 限制转向速度
+            twist.angular.z = twist.angular.z * min(self.turn_speed, 30) / 100.0
         else:
             # 瓶子基本居中，前进
-            twist.linear.x = self.approach_speed
-            self.get_logger().debug(f'远距离：前进，速度={self.approach_speed}m/s')
+            twist.linear.x = 0.3  # m/s
+            twist.linear.x = twist.linear.x * min(self.approach_speed, 60) / 100.0  # 限制远距离接近速度
+            self.current_direction = 0x00  # DIR_FORWARD
+            self.get_logger().info(f'远距离：瓶子居中，前进，速度={twist.linear.x:.2f}m/s')
         
         self.cmd_vel_pub.publish(twist)
     
@@ -260,14 +282,21 @@ class AutoHarvestController(Node):
         # 更精细的控制
         if abs(offset_x) > CENTER_DEADZONE:
             if offset_x > 0:
-                twist.angular.z = -self.fine_turn_speed
-                self.get_logger().debug('中等距离：向右微调')
+                twist.angular.z = 0.3  # rad/s
+                self.current_direction = 0x02  # DIR_LEFT
+                self.get_logger().info('中等距离：瓶子在左侧，向左微调')
             else:
-                twist.angular.z = self.fine_turn_speed
-                self.get_logger().debug('中等距离：向左微调')
+                twist.angular.z = -0.3  # rad/s
+                self.current_direction = 0x03  # DIR_RIGHT
+                self.get_logger().info('中等距离：瓶子在右侧，向右微调')
+            
+            # 使用更低的速度进行精确调整
+            twist.angular.z = twist.angular.z * self.fine_turn_speed / 100.0
         else:
-            twist.linear.x = self.fine_approach_speed
-            self.get_logger().debug(f'中等距离：缓慢前进，速度={self.fine_approach_speed}m/s')
+            twist.linear.x = 0.1  # m/s
+            twist.linear.x = twist.linear.x * self.fine_approach_speed / 100.0
+            self.current_direction = 0x00  # DIR_FORWARD
+            self.get_logger().info(f'中等距离：瓶子居中，缓慢前进，速度={twist.linear.x:.2f}m/s')
         
         self.cmd_vel_pub.publish(twist)
     
@@ -275,6 +304,8 @@ class AutoHarvestController(Node):
         """近距离接近策略"""
         # 停止移动
         self.stop_robot()
+        self.current_direction = 0x04  # DIR_STOP
+        self.get_logger().info('近距离：停止车辆，使用舵机微调')
         
         # 使用舵机进行跟踪
         tracking_msg = Point()
@@ -283,13 +314,12 @@ class AutoHarvestController(Node):
         tracking_msg.z = float(self.frame_width)  # 传递图像宽度
         
         self.tracking_pub.publish(tracking_msg)
-        
-        self.get_logger().debug('近距离：使用舵机跟踪')
     
     def stop_and_harvest(self, offset_x):
         """停止并执行采摘"""
         # 停止移动
         self.stop_robot()
+        self.current_direction = 0x04  # DIR_STOP
         
         # 检查是否对准
         if abs(offset_x) < CENTER_DEADZONE:
@@ -308,18 +338,11 @@ class AutoHarvestController(Node):
             tracking_msg.z = float(self.frame_width)
             self.tracking_pub.publish(tracking_msg)
     
-    def back_away(self):
-        """后退策略"""
-        twist = Twist()
-        twist.linear.x = -self.fine_approach_speed
-        self.cmd_vel_pub.publish(twist)
-        self.get_logger().debug('距离过近，后退')
-    
     def search_for_bottle(self):
         """搜索瓶子"""
         # 简单的旋转搜索策略
         twist = Twist()
-        twist.angular.z = self.turn_speed * 0.5  # 慢速旋转
+        twist.angular.z = 0.5 * 0.5  # 慢速旋转
         self.cmd_vel_pub.publish(twist)
         self.get_logger().debug('搜索模式：旋转寻找目标')
     
