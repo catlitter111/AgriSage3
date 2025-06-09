@@ -144,31 +144,33 @@ def generate_launch_description():
         }]
     )
     
-    # 自动采摘控制器
+    # 自动采摘控制器 - 修复：参数应该是百分比值（0-100）
     auto_harvest_node = Node(
         package='bottle_detection_ros2',
         executable='auto_harvest_controller',
         name='auto_harvest',
         output='screen',
         parameters=[{
-            'control_rate': 10.0,
-            'search_timeout': 5.0,
-            'approach_speed': 0.3,
-            'turn_speed': 0.5,
-            'fine_approach_speed': 0.1,
-            'fine_turn_speed': 0.3,
+            'control_rate': 10.0,        # 控制频率 (Hz)
+            'search_timeout': 5.0,       # 搜索超时 (秒)
+            'approach_speed': 30.0,      # 接近速度 (百分比 0-100)
+            'turn_speed': 20.0,          # 转向速度 (百分比 0-100)
+            'fine_approach_speed': 10.0, # 精细接近速度 (百分比 0-100)
+            'fine_turn_speed': 15.0,     # 精细转向速度 (百分比 0-100)
         }]
     )
     
     # 日志信息
     log_info = LogInfo(
         msg=[
+            '\n========================================\n',
             '正在启动集成瓶子检测和采摘系统...\n',
             '机器人ID: ', LaunchConfiguration('robot_id'), '\n',
             'WebSocket服务器: ', LaunchConfiguration('ws_server_url'), '\n',
             '相机ID: ', LaunchConfiguration('camera_id'), '\n',
             '模型路径: ', LaunchConfiguration('model_path'), '\n',
-            '显示窗口: ', LaunchConfiguration('show_display')
+            '显示窗口: ', LaunchConfiguration('show_display'), '\n',
+            '========================================\n'
         ]
     )
     

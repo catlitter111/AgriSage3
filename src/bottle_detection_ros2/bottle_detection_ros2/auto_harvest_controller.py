@@ -37,13 +37,13 @@ class AutoHarvestController(Node):
     def __init__(self):
         super().__init__('auto_harvest_controller')
         
-        # 声明参数
+        # 声明参数 - 确保所有参数都是浮点数
         self.declare_parameter('control_rate', 10.0)  # Hz
         self.declare_parameter('search_timeout', 5.0)  # 秒
-        self.declare_parameter('approach_speed', 30)  # 百分比
-        self.declare_parameter('turn_speed', 20)  # 百分比
-        self.declare_parameter('fine_approach_speed', 10)  # 百分比
-        self.declare_parameter('fine_turn_speed', 15)  # 百分比
+        self.declare_parameter('approach_speed', 30.0)  # 百分比 (0-100)
+        self.declare_parameter('turn_speed', 20.0)  # 百分比 (0-100)
+        self.declare_parameter('fine_approach_speed', 10.0)  # 百分比 (0-100)
+        self.declare_parameter('fine_turn_speed', 15.0)  # 百分比 (0-100)
         
         # 获取参数
         self.control_rate = self.get_parameter('control_rate').value
@@ -52,6 +52,40 @@ class AutoHarvestController(Node):
         self.turn_speed = self.get_parameter('turn_speed').value
         self.fine_approach_speed = self.get_parameter('fine_approach_speed').value
         self.fine_turn_speed = self.get_parameter('fine_turn_speed').value
+        
+        # 参数验证和修正
+        # 如果参数值小于1，可能是速度值而不是百分比，进行转换
+        if self.approach_speed < 1.0:
+            self.approach_speed = self.approach_speed * 100.0
+            self.get_logger().warn(f'approach_speed 参数已从速度值转换为百分比: {self.approach_speed}%')
+        
+        if self.turn_speed < 1.0:
+            self.turn_speed = self.turn_speed * 100.0
+            self.get_logger().warn(f'turn_speed 参数已从速度值转换为百分比: {self.turn_speed}%')
+        
+        if self.fine_approach_speed < 1.0:
+            self.fine_approach_speed = self.fine_approach_speed * 100.0
+            self.get_logger().warn(f'fine_approach_speed 参数已从速度值转换为百分比: {self.fine_approach_speed}%')
+        
+        if self.fine_turn_speed < 1.0:
+            self.fine_turn_speed = self.fine_turn_speed * 100.0
+            self.get_logger().warn(f'fine_turn_speed 参数已从速度值转换为百分比: {self.fine_turn_speed}%')
+        
+        # 限制参数范围
+        self.approach_speed = max(0.0, min(100.0, self.approach_speed))
+        self.turn_speed = max(0.0, min(100.0, self.turn_speed))
+        self.fine_approach_speed = max(0.0, min(100.0, self.fine_approach_speed))
+        self.fine_turn_speed = max(0.0, min(100.0, self.fine_turn_speed))
+        
+        self.get_logger().info(
+            f'自动采摘控制器参数:\n'
+            f'  控制频率: {self.control_rate} Hz\n'
+            f'  搜索超时: {self.search_timeout} 秒\n'
+            f'  接近速度: {self.approach_speed}%\n'
+            f'  转向速度: {self.turn_speed}%\n'
+            f'  精细接近速度: {self.fine_approach_speed}%\n'
+            f'  精细转向速度: {self.fine_turn_speed}%'
+        )
         
         # 创建订阅者
         # 模式控制
@@ -114,7 +148,7 @@ class AutoHarvestController(Node):
         
         # 创建控制定时器
         self.control_timer = self.create_timer(
-            0.1,  # 10Hz控制频率
+            1.0 / self.control_rate,  # 根据控制频率计算定时器周期
             self.control_loop
         )
         
@@ -264,12 +298,13 @@ class AutoHarvestController(Node):
                 self.current_direction = 0x03  # DIR_RIGHT
                 self.get_logger().info('远距离：瓶子在右侧，向右转')
             
-            # 限制转向速度
-            twist.angular.z = twist.angular.z * min(self.turn_speed, 30) / 100.0
+            # 应用转向速度百分比
+            twist.angular.z = twist.angular.z * self.turn_speed / 100.0
         else:
             # 瓶子基本居中，前进
             twist.linear.x = 0.3  # m/s
-            twist.linear.x = twist.linear.x * min(self.approach_speed, 60) / 100.0  # 限制远距离接近速度
+            # 应用接近速度百分比
+            twist.linear.x = twist.linear.x * self.approach_speed / 100.0
             self.current_direction = 0x00  # DIR_FORWARD
             self.get_logger().info(f'远距离：瓶子居中，前进，速度={twist.linear.x:.2f}m/s')
         
@@ -290,10 +325,11 @@ class AutoHarvestController(Node):
                 self.current_direction = 0x03  # DIR_RIGHT
                 self.get_logger().info('中等距离：瓶子在右侧，向右微调')
             
-            # 使用更低的速度进行精确调整
+            # 应用精细转向速度百分比
             twist.angular.z = twist.angular.z * self.fine_turn_speed / 100.0
         else:
             twist.linear.x = 0.1  # m/s
+            # 应用精细接近速度百分比
             twist.linear.x = twist.linear.x * self.fine_approach_speed / 100.0
             self.current_direction = 0x00  # DIR_FORWARD
             self.get_logger().info(f'中等距离：瓶子居中，缓慢前进，速度={twist.linear.x:.2f}m/s')
@@ -342,7 +378,7 @@ class AutoHarvestController(Node):
         """搜索瓶子"""
         # 简单的旋转搜索策略
         twist = Twist()
-        twist.angular.z = 0.5 * 0.5  # 慢速旋转
+        twist.angular.z = 0.25  # 慢速旋转
         self.cmd_vel_pub.publish(twist)
         self.get_logger().debug('搜索模式：旋转寻找目标')
     
@@ -363,13 +399,17 @@ class AutoHarvestController(Node):
 def main(args=None):
     rclpy.init(args=args)
     
+    node = None  # 预先初始化变量
     try:
         node = AutoHarvestController()
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
+    except Exception as e:
+        print(f'节点运行出错: {e}')
     finally:
-        node.destroy_node()
+        if node is not None:  # 检查node是否已创建
+            node.destroy_node()
         rclpy.shutdown()
 
 

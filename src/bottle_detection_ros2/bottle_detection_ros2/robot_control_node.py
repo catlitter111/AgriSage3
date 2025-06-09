@@ -87,13 +87,21 @@ class RobotControlNode(Node):
             10
         )
         
-        # 状态变量
-        self.current_speed = 0
-        self.current_direction = DIR_STOP
+        # 状态变量 - 确保所有数值都是浮点数
+        self.current_speed = 0.0  # 浮点数
+        self.current_direction = float(DIR_STOP)  # 转换为浮点数
         self.position = {'x': 0.0, 'y': 0.0, 'latitude': 0.0, 'longitude': 0.0}
         self.battery_level = 85.0
         self.cpu_usage = 0.0
         self.harvested_count = 0
+        self.today_harvested = 0
+        self.total_harvested = 0
+        self.working_hours = 0.0
+        self.working_area = 0.0
+        self.harvest_accuracy = 96.5
+        self.temperature = 25.0
+        self.signal_strength = 75
+        self.upload_bandwidth = 50.0
         
         # 创建定时器发布状态
         self.create_timer(1.0 / self.status_rate, self.publish_status)
@@ -127,7 +135,7 @@ class RobotControlNode(Node):
                     port = ports[0].device
                     self.get_logger().info(f'尝试自动选择串口: {port}')
                     self.serial_port = port
-                    self.serial = serial.Serial(
+                    self.serial = Serial(
                         port=self.serial_port,
                         baudrate=self.baudrate,
                         timeout=self.timeout
@@ -173,22 +181,22 @@ class RobotControlNode(Node):
     def move(self, direction, speed):
         """控制机器人移动"""
         # 确保速度在0-100范围内
-        speed = max(0, min(100, int(speed * 100)))
+        speed_int = max(0, min(100, int(speed * 100)))
         
         # 生成方向和速度命令
-        command = self.generate_packet(CMD_SET_DIRECTION, [direction, speed])
+        command = self.generate_packet(CMD_SET_DIRECTION, [direction, speed_int])
         
         # 更新状态
-        self.current_direction = direction
-        self.current_speed = speed
+        self.current_direction = float(direction)  # 保持为浮点数
+        self.current_speed = float(speed)  # 保持为浮点数
         
         return self.send_command(command)
     
     def stop(self):
         """停止机器人"""
         command = self.generate_packet(CMD_SET_DIRECTION, [DIR_STOP, 0])
-        self.current_direction = DIR_STOP
-        self.current_speed = 0
+        self.current_direction = float(DIR_STOP)  # 保持为浮点数
+        self.current_speed = 0.0  # 保持为浮点数
         return self.send_command(command)
     
     def set_position(self, latitude, longitude):
@@ -307,24 +315,48 @@ class RobotControlNode(Node):
         status_msg.header.stamp = self.get_clock().now().to_msg()
         status_msg.header.frame_id = "base_link"
         
-        # 基本状态
-        status_msg.battery_level = self.battery_level
-        status_msg.cpu_usage = psutil.cpu_percent(interval=0.1)
-        status_msg.current_speed = self.current_speed
-        status_msg.current_direction = self.current_direction
+        # 基本状态 - 确保所有字段都是正确的类型
+        status_msg.battery_level = float(self.battery_level)
+        status_msg.cpu_usage = float(psutil.cpu_percent(interval=0.1))
+        status_msg.current_speed = float(self.current_speed)
+        status_msg.current_direction = float(self.current_direction)
         
         # 位置信息
-        status_msg.position_x = self.position['x']
-        status_msg.position_y = self.position['y']
-        status_msg.latitude = self.position['latitude']
-        status_msg.longitude = self.position['longitude']
+        status_msg.position_x = float(self.position['x'])
+        status_msg.position_y = float(self.position['y'])
+        status_msg.latitude = float(self.position['latitude'])
+        status_msg.longitude = float(self.position['longitude'])
         
         # 采摘统计
-        status_msg.harvested_count = self.harvested_count
+        status_msg.harvested_count = int(self.harvested_count)
+        status_msg.today_harvested = int(self.today_harvested)
+        status_msg.total_harvested = int(self.total_harvested)
+        
+        # 工作统计
+        status_msg.working_hours = float(self.working_hours)
+        status_msg.working_area = float(self.working_area)
         
         # 其他状态
-        status_msg.emergency_stop = self.emergency_stop
-        status_msg.is_moving = (self.current_direction != DIR_STOP)
+        status_msg.emergency_stop = bool(self.emergency_stop)
+        status_msg.is_moving = bool(self.current_direction != DIR_STOP)
+        status_msg.is_harvesting = False  # 默认值
+        
+        # 网络信息
+        status_msg.signal_strength = int(self.signal_strength)
+        status_msg.upload_bandwidth = float(self.upload_bandwidth)
+        
+        # 状态描述
+        if self.emergency_stop:
+            status_msg.status_text = "紧急停止"
+        elif self.current_direction != DIR_STOP:
+            status_msg.status_text = "移动中"
+        else:
+            status_msg.status_text = "待机"
+        
+        # 额外字段
+        status_msg.harvest_accuracy = float(self.harvest_accuracy)
+        status_msg.temperature = float(self.temperature)
+        status_msg.location_name = "苹果园区3号地块"
         
         self.status_pub.publish(status_msg)
     
