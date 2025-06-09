@@ -95,7 +95,7 @@ def generate_launch_description():
             'publish_rate': 30.0,
             'min_distance': 0.2,
             'max_distance': 5.0,
-            'confidence_threshold': 0.5,
+            'confidence_threshold': 0.1,
             'enable_servo_tracking': True,
         }]
     )

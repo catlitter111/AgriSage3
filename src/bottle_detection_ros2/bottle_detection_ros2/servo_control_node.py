@@ -339,85 +339,168 @@ class ServoControlNode(Node):
     
     def track_object(self, frame_width, frame_height, center_x, center_y):
         """跟踪物体，控制舵机使其保持在画面中心"""
-        if center_x is None or center_y is None:
-            return
-        
-        # 计算图像中心
-        frame_center_x = frame_width // 2 + 80
-        frame_center_y = frame_height // 2
-        
-        # 计算像素误差
-        pixel_error_x = center_x - frame_center_x
-        pixel_error_y = center_y - frame_center_y
-        
-        # 将像素误差转换为PWM误差
-        pwm_error_x = pixel_error_x * self.pixel_to_pwm_ratio
-        pwm_error_y = pixel_error_y * self.pixel_to_pwm_ratio
-        
-        # 死区检测
-        if abs(pixel_error_x) < self.dead_zone_x:
-            pixel_error_x = 0
-            pwm_error_x = 0
-        if abs(pixel_error_y) < self.dead_zone_y:
-            pixel_error_y = 0
-            pwm_error_y = 0
-        
-        # PID控制
-        if pixel_error_x != 0 or pixel_error_y != 0:
-            horizontal_output = self.horizontal_pid.update(pwm_error_x)
-            vertical_output = self.vertical_pid.update(pwm_error_y)
+        if center_x is not None and center_y is not None:
             
-            new_h_pos = None
-            new_v_pos = None
+            # 计算图像中心
+            frame_center_x = frame_width // 2 + 80
+            frame_center_y = frame_height // 2
             
-            # 水平舵机控制
-            if abs(horizontal_output) > self.horizontal_movement_threshold:
-                new_h_pos = self.current_horizontal_pos - horizontal_output
-                
-                # 平滑滤波
-                new_h_pos = (self.smooth_factor * self.current_horizontal_pos + 
-                            (1 - self.smooth_factor) * new_h_pos)
-                
-                # 限制在水平舵机范围内
-                new_h_pos = max(self.horizontal_servo_range[0], 
-                               min(self.horizontal_servo_range[1], int(new_h_pos)))
+            # 计算像素误差
+            pixel_error_x = center_x - frame_center_x
+            pixel_error_y = center_y - frame_center_y
             
-            # 垂直舵机控制
-            if abs(vertical_output) > self.vertical_movement_threshold:
-                new_v_pos = self.current_vertical_pos - vertical_output
-                
-                # 平滑滤波
-                new_v_pos = (self.smooth_factor * self.current_vertical_pos + 
-                            (1 - self.smooth_factor) * new_v_pos)
-                
-                # 限制在垂直舵机范围内
-                new_v_pos = max(self.vertical_servo_range[0], 
-                               min(self.vertical_servo_range[1], int(new_v_pos)))
+            # 将像素误差转换为PWM误差（总是计算，用于调试显示）
+            pwm_error_x = pixel_error_x * self.pixel_to_pwm_ratio
+            pwm_error_y = pixel_error_y * self.pixel_to_pwm_ratio
             
-            # 发送命令
-            if new_h_pos is not None and new_v_pos is not None:
-                # 只有当两个位置都需要更新且变化足够大时才发送组合命令
-                if abs(new_h_pos - self.current_horizontal_pos) > 3 and abs(new_v_pos - self.current_vertical_pos) > 3:
+            # 死区检测
+            if abs(pixel_error_x) < self.dead_zone_x:
+                pixel_error_x = 0
+                pwm_error_x = 0
+            if abs(pixel_error_y) < self.dead_zone_y:
+                pixel_error_y = 0
+                pwm_error_y = 0
+            
+            # PID控制 - 应用像素到PWM的转换比例
+            if pixel_error_x != 0 or pixel_error_y != 0:
+                horizontal_output = self.horizontal_pid.update(pwm_error_x)
+                vertical_output = self.vertical_pid.update(pwm_error_y)  # 垂直方向反向
+                
+                # 水平舵机控制
+                if abs(horizontal_output) > self.horizontal_movement_threshold:
+                    new_h_pos = self.current_horizontal_pos - horizontal_output
+                    
+                    # 平滑滤波
+                    new_h_pos = (self.smooth_factor * self.current_horizontal_pos + 
+                                (1 - self.smooth_factor) * new_h_pos)
+                    
+                    # 限制在水平舵机范围内
+                    new_h_pos = max(self.horizontal_servo_range[0],  
+                                   min(self.horizontal_servo_range[1], int(new_h_pos)))
+                    # 只有当位置变化足够大时才发送命令
+                    if abs(new_h_pos - self.current_horizontal_pos) > 3:
+                        try:
+                            self.current_horizontal_pos = new_h_pos
+                            self.current_positions[0] = new_h_pos
+                        except Exception as e:
+                            print(f"水平舵机控制错误: {e}")
+                
+                # 垂直舵机控制
+                if abs(vertical_output) > self.vertical_movement_threshold:
+                    new_v_pos = self.current_vertical_pos - vertical_output
+                    
+                    
+                    # 平滑滤波
+                    new_v_pos = (self.smooth_factor * self.current_vertical_pos + 
+                                (1 - self.smooth_factor) * new_v_pos)
+                    
+                    # 限制在垂直舵机范围内
+                    new_v_pos = max(self.vertical_servo_range[0], 
+                                   min(self.vertical_servo_range[1], int(new_v_pos)))
+                    # print(new_v_pos)
+                    # 只有当位置变化足够大时才发送命令
+                    if abs(new_v_pos - self.current_vertical_pos) > 3:
+                        try:
+                            self.current_vertical_pos = new_v_pos
+                            self.current_positions[1] = new_v_pos
+                        except Exception as e:
+                            print(f"舵机控制错误: {e}")
+                if  abs(horizontal_output) > self.horizontal_movement_threshold and abs(vertical_output) > self.vertical_movement_threshold:
                     command = f"#{0:03d}P{new_h_pos:04d}T{abs(new_h_pos - self.current_horizontal_pos):04d}!#{1:03d}P{new_v_pos:04d}T{abs(new_v_pos - self.current_vertical_pos):04d}!"
-                    self.send_command(command)
-                    self.current_horizontal_pos = new_h_pos
-                    self.current_vertical_pos = new_v_pos
-                    self.current_positions[0] = new_h_pos
-                    self.current_positions[1] = new_v_pos
-            elif new_h_pos is not None:
-                # 只更新水平位置
-                if abs(new_h_pos - self.current_horizontal_pos) > 3:
-                    command = f"#{0:03d}P{new_h_pos:04d}T{abs(new_h_pos - self.current_horizontal_pos):04d}!"
-                    self.send_command(command)
-                    self.current_horizontal_pos = new_h_pos
-                    self.current_positions[0] = new_h_pos
-            elif new_v_pos is not None:
-                # 只更新垂直位置
-                if abs(new_v_pos - self.current_vertical_pos) > 3:
-                    command = f"#{1:03d}P{new_v_pos:04d}T{abs(new_v_pos - self.current_vertical_pos):04d}!"
-                    self.send_command(command)
-                    self.current_vertical_pos = new_v_pos
-                    self.current_positions[1] = new_v_pos
+                    self.send_command(command)    
+                else:
+                    if abs(vertical_output) > self.vertical_movement_threshold:
+                        command = f"#{1:03d}P{new_v_pos:04d}T{abs(new_v_pos - self.current_vertical_pos):04d}!"
+                        self.send_command(command)
+                    elif abs(horizontal_output) > self.horizontal_movement_threshold:
+                        command = f"#{0:03d}P{new_h_pos:04d}T{abs(new_h_pos - self.current_horizontal_pos):04d}!"
+                        self.send_command(command)
+        else:
+            # 没有检测到色块时，初始化误差变量为0（用于调试显示）
+            pixel_error_x = pixel_error_y = 0
+            pwm_error_x = pwm_error_y = 0
+
+
+
+        # if center_x is None or center_y is None:
+        #     return
+        
+        # # 计算图像中心
+        # frame_center_x = frame_width // 2 + 80
+        # frame_center_y = frame_height // 2
+        
+        # # 计算像素误差
+        # pixel_error_x = center_x - frame_center_x
+        # pixel_error_y = center_y - frame_center_y
+        
+        # # 将像素误差转换为PWM误差
+        # pwm_error_x = pixel_error_x * self.pixel_to_pwm_ratio
+        # pwm_error_y = pixel_error_y * self.pixel_to_pwm_ratio
+        
+        # # 死区检测
+        # if abs(pixel_error_x) < self.dead_zone_x:
+        #     pixel_error_x = 0
+        #     pwm_error_x = 0
+        # if abs(pixel_error_y) < self.dead_zone_y:
+        #     pixel_error_y = 0
+        #     pwm_error_y = 0
+        
+        # # PID控制
+        # if pixel_error_x != 0 or pixel_error_y != 0:
+        #     horizontal_output = self.horizontal_pid.update(pwm_error_x)
+        #     vertical_output = self.vertical_pid.update(pwm_error_y)
+            
+        #     new_h_pos = None
+        #     new_v_pos = None
+            
+        #     # 水平舵机控制
+        #     if abs(horizontal_output) > self.horizontal_movement_threshold:
+        #         new_h_pos = self.current_horizontal_pos - horizontal_output
+                
+        #         # 平滑滤波
+        #         new_h_pos = (self.smooth_factor * self.current_horizontal_pos + 
+        #                     (1 - self.smooth_factor) * new_h_pos)
+                
+        #         # 限制在水平舵机范围内
+        #         new_h_pos = max(self.horizontal_servo_range[0], 
+        #                        min(self.horizontal_servo_range[1], int(new_h_pos)))
+            
+        #     # 垂直舵机控制
+        #     if abs(vertical_output) > self.vertical_movement_threshold:
+        #         new_v_pos = self.current_vertical_pos - vertical_output
+                
+        #         # 平滑滤波
+        #         new_v_pos = (self.smooth_factor * self.current_vertical_pos + 
+        #                     (1 - self.smooth_factor) * new_v_pos)
+                
+        #         # 限制在垂直舵机范围内
+        #         new_v_pos = max(self.vertical_servo_range[0], 
+        #                        min(self.vertical_servo_range[1], int(new_v_pos)))
+            
+        #     # 发送命令
+        #     if new_h_pos is not None and new_v_pos is not None:
+        #         # 只有当两个位置都需要更新且变化足够大时才发送组合命令
+        #         if abs(new_h_pos - self.current_horizontal_pos) > 3 and abs(new_v_pos - self.current_vertical_pos) > 3:
+        #             command = f"#{0:03d}P{new_h_pos:04d}T{abs(new_h_pos - self.current_horizontal_pos):04d}!#{1:03d}P{new_v_pos:04d}T{abs(new_v_pos - self.current_vertical_pos):04d}!"
+        #             self.send_command(command)
+        #             self.current_horizontal_pos = new_h_pos
+        #             self.current_vertical_pos = new_v_pos
+        #             self.current_positions[0] = new_h_pos
+        #             self.current_positions[1] = new_v_pos
+        #     elif new_h_pos is not None:
+        #         # 只更新水平位置
+        #         if abs(new_h_pos - self.current_horizontal_pos) > 3:
+        #             command = f"#{0:03d}P{new_h_pos:04d}T{abs(new_h_pos - self.current_horizontal_pos):04d}!"
+        #             self.send_command(command)
+        #             self.current_horizontal_pos = new_h_pos
+        #             self.current_positions[0] = new_h_pos
+        #     elif new_v_pos is not None:
+        #         # 只更新垂直位置
+        #         if abs(new_v_pos - self.current_vertical_pos) > 3:
+        #             command = f"#{1:03d}P{new_v_pos:04d}T{abs(new_v_pos - self.current_vertical_pos):04d}!"
+        #             self.send_command(command)
+        #             self.current_vertical_pos = new_v_pos
+        #             self.current_positions[1] = new_v_pos
     
     def servo_command_callback(self, msg):
         """舵机命令回调"""
