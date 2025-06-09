@@ -307,7 +307,7 @@ def test_video_async(model_path, video_path, thread_num=3):
     
     # 打开视频源
     if video_path == "1":
-        cap = cv2.VideoCapture(1, cv2.CAP_V4L2)
+        cap = cv2.VideoCapture(21, cv2.CAP_V4L2)
         logger.info("使用摄像头进行测试")
     else:
         cap = cv2.VideoCapture(video_path)
@@ -456,7 +456,7 @@ if __name__ == '__main__':
     """主函数 - 测试异步瓶子检测"""
     
     # 默认模型路径（需要根据实际情况修改）
-    MODEL_PATH = "/home/monster/download/AgriSage3/src/bottle_detection_ros2/data/yolo11n.rknn"
+    MODEL_PATH = "/home/elf/Desktop/robot_ROS2/src/bottle_detection_ros2/data/yolo11n.rknn"
     
     # 运行模式选择
     if len(sys.argv) > 1:
