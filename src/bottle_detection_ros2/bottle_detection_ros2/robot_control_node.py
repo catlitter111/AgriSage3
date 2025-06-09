@@ -116,30 +116,14 @@ class RobotControlNode(Node):
         
         # 采摘统计 - 设置有意义的初值
         self.harvested_count = 0
-        self.today_harvested = random.randint(80, 250)  # 今日已有一些采摘数据
-        self.total_harvested = random.randint(1500, 4000)  # 历史总采摘数
-        
-        # 工作统计 - 设置有意义的初值
-        self.working_hours = random.uniform(1.2, 4.5)  # 今日已工作一段时间
-        self.working_area = random.uniform(0.8, 3.2)  # 今日已作业一些面积
-        
-        # 设备性能
-        self.harvest_accuracy = random.uniform(92.5, 97.8)  # 采摘准确率
-        self.temperature = random.uniform(28, 35)  # 设备温度
-        self.signal_strength = random.randint(65, 88)  # 信号强度
-        self.upload_bandwidth = random.uniform(15, 45)  # 上传带宽
-        
-        # 统计数据初始化 - 添加数据模拟逻辑
-        self.start_time = time.time()
-        self.last_harvest_time = time.time()
-        self.last_position_update = time.time()
-        
-        # 模拟数据相关
-        self.is_working = False
-        self.work_mode = "idle"  # idle, moving, harvesting
-        self.harvest_rate = 0.5  # 每分钟采摘数量
-        self.movement_speed = 0.3  # m/s
-        self.position_noise = 0.00005  # 位置噪声
+        self.today_harvested = 0
+        self.total_harvested = 0
+        self.working_hours = 0.0
+        self.working_area = 0.0
+        self.harvest_accuracy = 96.5
+        self.temperature = 25.0
+        self.signal_strength = 75
+        self.upload_bandwidth = 50.0
         
         # 创建定时器发布状态
         self.status_timer = self.create_timer(2.0, self.publish_status)
